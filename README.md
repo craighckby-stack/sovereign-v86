@@ -4,10 +4,10 @@
 through 106 iterations of recursive self-improvement 
 (rolled back to v86 for optimal performance)*
 
-Built on free-tier APIs. MIT licensed. Production-ready.
+Built on free-tier APIs. MIT licensed. 
 
 
-how to 
+How to 
 
 input github repo and name
 

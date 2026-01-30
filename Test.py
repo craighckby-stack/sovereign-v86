@@ -1,3 +1,6 @@
+defuse" this trap and restore the debugger's vision
+
+
 import sys
 from typing import Callable, Any, FrameType
 

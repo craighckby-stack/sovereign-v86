@@ -1,33 +1,40 @@
 """
-This module is a single source file designed to demonstrate polyglot execution,
-yielding different outputs when interpreted by Python, C, and Java parsers.
+This module serves as a polyglot source file, designed to produce different outputs
+when interpreted by Python, C, and Java compilers/interpreters.
 
-The C and Java source code blocks are encapsulated within this module's docstring
-(a multiline string literal), which Python safely parses and ignores (since it's
-not assigned to a variable or used as a function docstring).
-
-// -----------------------------------------------------------------------------
-// === C Source Code (prints 'World') ===
-#include <stdio.h>
-int main() {
-    printf("World\n");
-    return 0;
-}
-
-/*
-// === Java Source Code (prints '!') ===
-class PolyglotOutput {
-    public static void main(String[] args) {
-        System.out.println("!");
-    }
-}
-*/
-// -----------------------------------------------------------------------------
+The C and Java source code blocks are embedded within this module's primary docstring.
+Python ignores this docstring; C and Java parsers utilize their respective blocks.
 """
 
-# --- Python Execution ---
-# Python skips the preceding docstring (string literal) and executes the remaining logic.
-# Target output: "Hello"
+# --- Configuration & Metadata ---
+# Constants are generally preferred over raw literals for clarity.
+FILE_DESCRIPTION = "Polyglot Code Execution Demonstrator"
+PYTHON_OUTPUT = "Hello"
+
+# --- C Source Block (Starts after Python docstring) ---
+# This block is commented out in Python but intended for C compilation.
+#
+# #include <stdio.h>
+# int main() {
+#     printf("World\n");
+#     return 0;
+# }
+
+# --- Java Source Block (Embedded within docstring comments) ---
+# /*
+# class PolyglotOutput {
+#     public static void main(String[] args) {
+#         System.out.println("!");
+#     }
+# }
+# */
+
+# --- Python Execution Logic ---
+# Python execution starts here, skipping the preceding docstring.
 
 if __name__ == '__main__':
-    print("Hello")
+    """
+    Main execution block for Python.
+    If this file is run directly via the Python interpreter, it prints 'Hello'.
+    """
+    print(PYTHON_OUTPUT)

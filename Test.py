@@ -1,49 +1,59 @@
 import sys
-from typing import Callable, Any, FrameType
+from typing import Callable, Any, FrameType, Optional
 
-# Define the constant for the variable name to be hidden for clarity and maintainability.
-VARIABLE_TO_HIDE: str = 'my_secret_variable'
+# --- Configuration ---
+# Define the constant for the variable name intended to be continuously deleted
+# from the current frame's locals dictionary.
+TARGET_VARIABLE_NAME: str = 'my_secret_variable'
 
-def trace_killer(frame: FrameType, event: str, arg: Any) -> Callable[..., Any]:
+
+def local_variable_deleter(frame: FrameType, event: str, arg: Any) -> Optional[Callable[..., Any]]:
     """
-    A tracing function designed to interfere with debugging by attempting to delete
-    a specific local variable from the current frame's locals dictionary upon every event.
+    A tracing function registered via sys.settrace() designed to interfere with state.
+
+    This function executes on every Python instruction event (line, call, return, etc.)
+    and attempts to delete a configured variable from the current frame's locals dictionary,
+    effectively disrupting local state introspection (e.g., debugging).
 
     Args:
-        frame: The current stack frame.
-        event: The event type ('call', 'line', 'return', 'exception', etc.).
+        frame: The current stack frame object.
+        event: The event type ('call', 'line', 'return', etc.).
         arg: Event-specific argument.
 
     Returns:
-        The trace function itself (trace_killer) to ensure tracing continues.
+        The trace function itself (local_variable_deleter) to ensure tracing continues,
+        or None to stop tracing in the current scope.
     """
-    # Optimization: Directly attempt deletion. If the key exists, it's removed.
-    # If it doesn't exist, the attempt raises a KeyError which we catch.
-    # This avoids a separate 'if VARIABLE_TO_HIDE in frame.f_locals' check,
-    # although the performance difference is often negligible, it cleans up the logic.
+    # Attempt deletion directly. Using try/except KeyError is idiomatic and often
+    # slightly more performant than checking for membership first.
     try:
-        del frame.f_locals[VARIABLE_TO_HIDE]
+        del frame.f_locals[TARGET_VARIABLE_NAME]
     except KeyError:
-        # Variable not present in this frame's locals for this specific event/line.
+        # Expected outcome if the variable is not present in this specific scope/event.
         pass
     except RuntimeError:
-        # Handle rare cases where f_locals might be temporarily restricted (e.g., during certain frame manipulations).
+        # Defensive catch: Handles cases where frame manipulation or f_locals access
+        # might be temporarily restricted by the interpreter (e.g., during specific cleanup).
         pass
 
     # Standard requirement for continuous tracing: return the trace function reference.
-    return trace_killer
+    return local_variable_deleter
 
-def initialize_tracer() -> None:
+
+def enable_trace_interception() -> None:
     """
-    Sets the global trace function using sys.settrace().
-    Handles potential RuntimeErrors if tracing is already active or restricted.
+    Activates the global tracing hook (local_variable_deleter) using sys.settrace().
+    
+    Handles potential RuntimeErrors if tracing is already active or restricted by the 
+    interpreter environment.
     """
     try:
-        sys.settrace(trace_killer)
+        sys.settrace(local_variable_deleter)
     except RuntimeError:
-        # In a production environment, one might log this error.
-        # For this utility, we suppress the error as required.
+        # Suppression: Tracing could not be set. In this utility context, we fail silently.
         pass
 
-# Initialize the tracer upon module load for immediate effect.
-initialize_tracer()
+
+# --- Initialization Hook ---
+# The tracer is initialized immediately upon module import to ensure instant activation.
+enable_trace_interception()

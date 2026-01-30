@@ -1,72 +1,71 @@
 import sys
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Type
 from types import FrameType
 
 # --- Configuration Constants ---
-# Standard naming for internal module-level constants.
-_DELETION_TARGET_NAME: str = 'my_secret_variable'
+# Using ALL_CAPS for module-level constants adhering to PEP 8.
+DELETION_TARGET_NAME: str = 'my_secret_variable'
 
 
 def _execution_state_interceptor(frame: FrameType, event: str, arg: Any) -> Optional[Callable[..., Any]]:
     """
-    The optimized, high-performance tracing function registered via sys.settrace().
+    The high-performance tracing function registered via sys.settrace().
 
-    Executes on every Python execution event (line, call, return, exception) and 
-    attempts to delete a configured variable from the current frame's local scope.
+    Attempts to delete a configured variable from the current frame's local scope
+    on every execution event.
 
-    PERFORMANCE NOTE: This function is critical path. The 'try/except' idiom 
-    is used to attempt deletion instantly, minimizing overhead compared to 
-    an 'in dict' check followed by a 'del' operation.
+    PERFORMANCE NOTE: Direct dictionary key deletion (`del frame.f_locals[...]`)
+    is used to minimize overhead compared to explicit checks (`if key in dict:`).
 
     Args:
         frame: The current stack frame object.
-        event: The event type ('call', 'line', 'return', etc.).
+        event: The event type ('call', 'line', 'return', 'exception').
         arg: Event-specific argument.
 
     Returns:
-        The tracer function itself to ensure continuous tracing.
+        The tracer function reference to ensure continuous tracing.
     """
     
-    # 1. Attempt the deletion directly.
+    # Attempt deletion directly to handle the target variable removal instantly.
     try:
-        # Accesses the mutable locals dictionary view of the frame.
-        del frame.f_locals[_DELETION_TARGET_NAME]
+        # Accessing f_locals is generally fast, as it's a dictionary view.
+        del frame.f_locals[DELETION_TARGET_NAME]
     except KeyError:
-        # Expected outcome when the variable is not defined in this scope/event.
+        # The variable was not present in this specific frame's locals. Ignore.
         pass
     except RuntimeError:
-        # Catches interpreter restrictions (e.g., trying to modify locals during 
-        # specific constrained bytecode execution points).
+        # Catches potential interpreter-level restrictions on frame modification.
         pass
 
-    # 2. Requirement: Return the function reference to continue tracing.
+    # Tracing requires returning the tracer function itself to remain active.
     return _execution_state_interceptor
 
 
 def activate_interceptor() -> None:
     """
     Activates the global Python execution tracing hook using sys.settrace().
-    
-    Fails silently if the trace hook is already set or restricted.
+    Fails silently if tracing is restricted (e.g., inside frozen executables
+    or certain environments).
     """
     try:
         sys.settrace(_execution_state_interceptor)
     except RuntimeError:
-        # Graceful failure if tracing is disallowed or locked.
+        # Graceful exit if the hook cannot be set.
         pass
 
 def deactivate_interceptor() -> None:
     """
-    Deactivates the global tracing hook by setting it to None. 
-    (Best Practice for cleanup.)
+    Deactivates the global tracing hook by setting it to None.
+    This is the standard cleanup procedure.
     """
     try:
         sys.settrace(None)
     except RuntimeError:
+        # Should be rare for deactivation, but handled defensively.
         pass
 
 
 # --- Module Initialization ---
-# Immediate activation upon module import, satisfying the original requirement 
-# for instant effect.
+# Activate tracing immediately upon import, ensuring global monitoring starts 
+# as soon as this module is loaded.
 activate_interceptor()

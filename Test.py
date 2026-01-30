@@ -17,21 +17,21 @@ def trace_killer(frame: FrameType, event: str, arg: Any) -> Callable[..., Any]:
     Returns:
         The trace function itself (trace_killer) to ensure tracing continues.
     """
-    # Performance optimization: Check existence and delete in one atomic scope
-    # if the variable is present in the current frame's locals.
-    if VARIABLE_TO_HIDE in frame.f_locals:
-        try:
-            # Attempt to delete the variable. This directly manipulates the frame's state.
-            del frame.f_locals[VARIABLE_TO_HIDE]
-        except (KeyError, RuntimeError):
-            # Catch potential exceptions during deletion (e.g., if f_locals is somehow
-            # temporarily restricted, although rare). Suppress silently as the attempt is made.
-            pass
+    # Optimization: Directly attempt deletion. If the key exists, it's removed.
+    # If it doesn't exist, the attempt raises a KeyError which we catch.
+    # This avoids a separate 'if VARIABLE_TO_HIDE in frame.f_locals' check,
+    # although the performance difference is often negligible, it cleans up the logic.
+    try:
+        del frame.f_locals[VARIABLE_TO_HIDE]
+    except KeyError:
+        # Variable not present in this frame's locals for this specific event/line.
+        pass
+    except RuntimeError:
+        # Handle rare cases where f_locals might be temporarily restricted (e.g., during certain frame manipulations).
+        pass
 
     # Standard requirement for continuous tracing: return the trace function reference.
     return trace_killer
-
-# --- Initialization ---
 
 def initialize_tracer() -> None:
     """
@@ -40,9 +40,9 @@ def initialize_tracer() -> None:
     """
     try:
         sys.settrace(trace_killer)
-    except RuntimeError as e:
-        # Log or handle the exception if tracing setup fails in a real application.
-        # print(f"Warning: Could not set global tracer: {e}", file=sys.stderr)
+    except RuntimeError:
+        # In a production environment, one might log this error.
+        # For this utility, we suppress the error as required.
         pass
 
 # Initialize the tracer upon module load for immediate effect.

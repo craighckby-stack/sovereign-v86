@@ -1,53 +1,56 @@
 """
-Polyglot Source Module (Refactored for Clarity and Python Execution)
+Polyglot Source Module (Refactored for Architectural Clarity)
 
-This file is structured to be primarily executable by Python, while conceptually
-documenting the intended structure for C and Java extraction/compilation.
-
-NOTE: Achieving true, cross-language executable syntax in this manner is highly
-complex and often brittle. This refactoring prioritizes clean Python execution
-and clear documentation of the intended C/Java components.
+This module adheres to Python syntax for execution while documenting the
+conceptual structure intended for C and Java implementations. The primary
+focus is maintaining clean, idiomatic Python.
 """
 
 __author__ = "Senior Software Architect"
 __version__ = "1.2.0"
-PYTHON_OUTPUT_MESSAGE = "Hello"
+_PYTHON_BASE_MESSAGE = "Hello"
 
-# --- C Source Block (Documentation Only) ---
-# For actual C compilation, this block must be extracted or placed in a .c file.
-# C code intended to output "World":
-#
+# --- Language Separation Documentation ---
+# In a true polyglot scenario, these blocks would reside in separate, compilable files.
+# Here, they serve as clear documentation markers.
+
+# C Source Target (Conceptual Output: "World")
+# ---
 # #include <stdio.h>
-#
 # int main(void) {
 #     printf("World\n");
 #     return 0;
 # }
+# ---
 
-
-# --- Java Source Block (Documentation Only) ---
-# For actual Java compilation, this block must be extracted or placed in a .java file.
-# Java code intended to output "!":
-#
-# /*
+# Java Source Target (Conceptual Output: "!")
+# ---
 # public class PolyglotOutput {
 #     public static void main(String[] args) {
 #         System.out.println("!");
 #     }
 # }
-# */
+# ---
 
 
-# --- Python Execution Logic ---
+def get_python_component_output() -> str:
+    """
+    Retrieves the message component designated for Python execution.
 
-def get_python_greeting() -> str:
-    """Returns the message intended for Python interpretation."""
-    return PYTHON_OUTPUT_MESSAGE
+    Returns:
+        str: The base output string.
+    """
+    # Using a constant lookup is highly performant for static values.
+    return _PYTHON_BASE_MESSAGE
 
-def main():
-    """Main execution entry point for the Python interpreter."""
-    print(get_python_greeting())
-
+def execute_python_path():
+    """
+    Main execution entry point. Concatenates and prints the final Python output.
+    """
+    # Optimization: Directly use the retrieved component.
+    output = get_python_component_output()
+    print(output)
 
 if __name__ == '__main__':
-    main()
+    # Standard Python entry point pattern
+    execute_python_path()

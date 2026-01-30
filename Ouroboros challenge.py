@@ -34,23 +34,33 @@ class ExecutionResult(TypedDict):
     initial_code_snippet: str
     successful_closure: bool
 
+# --- Helper Function ---
+
+def _extract_first_line(code: str) -> str:
+    """Utility to safely extract and clean the first non-empty line of code."""
+    if not code:
+        return "N/A"
+    
+    # Use list comprehension for efficiency in stripping and filtering empty lines
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    return lines[0] if lines else "N/A"
+
+
 # --- Transformation Logic (Placeholders) ---
-# In a production system, these would contain sophisticated AST manipulation or code parsers.
 
 def generate_python_from_ruby(code: str) -> str:
     """Generates Python code from Ruby source fragment."""
-    # Optimization: Using str.splitlines() directly is faster than splitting and joining or stripping multiple times.
-    snippet = code.strip().splitlines()[0] if code.strip() else ""
+    snippet = _extract_first_line(code)
     return f"# Python generated from Ruby: '{snippet}'..."
 
 def generate_java_from_python(code: str) -> str:
     """Generates Java code from Python source fragment."""
-    snippet = code.strip().splitlines()[0] if code.strip() else ""
+    snippet = _extract_first_line(code)
     return f"// Java public class generated from Python: '{snippet}'..."
 
 def closing_transformer(code: str) -> str:
     """Regenerates the starting language (Ruby) from the previous step (e.g., Java)."""
-    snippet = code.strip().splitlines()[0] if code.strip() else ""
+    snippet = _extract_first_line(code)
     return f"# Ruby code successfully regenerated. Traceback: {snippet}..."
 
 
@@ -71,13 +81,13 @@ class TransformationPipeline:
         
         self.chain: List[TransformationStep] = transformations
         self.chain_length = len(transformations)
+        
         self._validate_chain_integrity()
         self._validate_ouroboros_closure()
 
     def _validate_chain_integrity(self) -> None:
         """
         Ensures strict language contiguity: Output(N) must match Input(N+1).
-        This guarantees a contiguous, executable pipeline segment.
         """
         
         # 1. Validate internal step transitions
@@ -110,59 +120,50 @@ class TransformationPipeline:
     def execute_generation(self, initial_code: str, max_cycles: int = AppConfig.MAX_CYCLES) -> ExecutionResult:
         """
         Runs the initial code through the transformation pipeline for a specified number of cycles.
-
-        Args:
-            initial_code: The source code in the configured START_LANG.
-            max_cycles: The maximum number of full pipeline cycles to attempt.
-
-        Returns:
-            ExecutionResult: A structured dictionary containing results and metadata.
         """
         current_code = initial_code
         current_language = AppConfig.START_LANG
         history: List[HistoryEntry] = []
         successful_closure = False
-        current_cycle = 0 # Initialize cycle counter
+        cycles_run = 0 # Tracks how many cycles were *started* or *completed*
 
         print(f"--- Transformation Engine Initialized ---")
         print(f"Pipeline length: {self.chain_length} steps/cycle. Max Cycles: {max_cycles}\n")
 
         for cycle_num in range(1, max_cycles + 1):
-            current_cycle = cycle_num
+            cycles_run = cycle_num
             
             for step_index, step in enumerate(self.chain):
                 
                 # State Check (Defense in Depth)
                 if step.input_lang != current_language:
                      raise SystemError(
-                         f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang} at C{current_cycle}/S{step_index+1}."
+                         f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang} at Cycle {cycle_num}/Step {step_index+1}."
                      )
 
                 # Execute transformation
-                print(f"[C{current_cycle}/S{step_index+1}] Translating {step.input_lang} -> {step.output_lang}")
+                print(f"[C{cycle_num}/S{step_index+1}] Translating {step.input_lang} -> {step.output_lang}")
                 
-                new_code = step.generator(current_code)
+                current_code = step.generator(current_code)
                 
-                # Update state
-                current_code = new_code
+                # Update state and record history
                 current_language = step.output_lang
                 
-                # Record history
                 history.append(HistoryEntry(
-                    cycle=current_cycle,
+                    cycle=cycle_num,
                     step_in_cycle=step_index + 1,
                     input_lang=step.input_lang,
-                    output_lang=step.output_lang,
+                    output_lang=current_language,
                     code_length=len(current_code)
                 ))
             
             # Post-cycle check: Check if the language matches the START language
             if current_language == AppConfig.START_LANG:
-                 print(f"\nSUCCESS: Cycle {current_cycle} completed. Ouroboros closed by returning to {AppConfig.START_LANG}.")
+                 print(f"\nSUCCESS: Cycle {cycle_num} completed. Ouroboros closed by returning to {AppConfig.START_LANG}.")
                  successful_closure = True
                  break
             else:
-                 print(f"Cycle {current_cycle} completed. Current language is {current_language}. Continuing...")
+                 print(f"Cycle {cycle_num} completed. Current language is {current_language}. Continuing...")
         
         # Final summary message
         if not successful_closure:
@@ -171,10 +172,10 @@ class TransformationPipeline:
         # Return structured results
         return ExecutionResult(
             final_code=current_code,
-            cycles_run=current_cycle,
+            cycles_run=cycles_run,
             final_language=current_language,
             transformation_history=history,
-            initial_code_snippet=initial_code.strip().splitlines()[0] if initial_code.strip() else "N/A",
+            initial_code_snippet=_extract_first_line(initial_code),
             successful_closure=successful_closure
         )
 

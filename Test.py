@@ -1,18 +1,22 @@
 import sys
-from typing import Callable, Any, FrameType, Optional
+from typing import Callable, Any, Optional
+from types import FrameType
 
-# --- Constants ---
-# Define the constant for the variable name intended to be continuously deleted
-# from the current frame's locals dictionary.
-_TARGET_VARIABLE_NAME: str = 'my_secret_variable'
+# --- Configuration Constants ---
+# Standard naming for internal module-level constants.
+_DELETION_TARGET_NAME: str = 'my_secret_variable'
 
 
-def _trace_interceptor(frame: FrameType, event: str, arg: Any) -> Optional[Callable[..., Any]]:
+def _execution_state_interceptor(frame: FrameType, event: str, arg: Any) -> Optional[Callable[..., Any]]:
     """
-    A tracing function registered via sys.settrace() designed to interfere with state.
+    The optimized, high-performance tracing function registered via sys.settrace().
 
-    This function executes on every Python instruction event and attempts to delete
-    a configured variable from the current frame's locals dictionary.
+    Executes on every Python execution event (line, call, return, exception) and 
+    attempts to delete a configured variable from the current frame's local scope.
+
+    PERFORMANCE NOTE: This function is critical path. The 'try/except' idiom 
+    is used to attempt deletion instantly, minimizing overhead compared to 
+    an 'in dict' check followed by a 'del' operation.
 
     Args:
         frame: The current stack frame object.
@@ -20,36 +24,49 @@ def _trace_interceptor(frame: FrameType, event: str, arg: Any) -> Optional[Calla
         arg: Event-specific argument.
 
     Returns:
-        The trace function itself to ensure tracing continues, or None to stop tracing.
+        The tracer function itself to ensure continuous tracing.
     """
-    # Attempt deletion using 'del' directly. This is generally preferred over 'in' checks.
-    try:
-        del frame.f_locals[_TARGET_VARIABLE_NAME]
-    except KeyError:
-        # Variable not found in this specific scope/event. This is the expected path often.
-        pass
-    except RuntimeError:
-        # Defensive catch for interpreter restrictions on f_locals manipulation.
-        pass
-
-    # Standard requirement for continuous tracing: return the trace function reference.
-    return _trace_interceptor
-
-
-def initialize_tracer() -> None:
-    """
-    Activates the global tracing hook using sys.settrace().
     
-    Handles potential RuntimeErrors if tracing is already active or restricted.
+    # 1. Attempt the deletion directly.
+    try:
+        # Accesses the mutable locals dictionary view of the frame.
+        del frame.f_locals[_DELETION_TARGET_NAME]
+    except KeyError:
+        # Expected outcome when the variable is not defined in this scope/event.
+        pass
+    except RuntimeError:
+        # Catches interpreter restrictions (e.g., trying to modify locals during 
+        # specific constrained bytecode execution points).
+        pass
+
+    # 2. Requirement: Return the function reference to continue tracing.
+    return _execution_state_interceptor
+
+
+def activate_interceptor() -> None:
+    """
+    Activates the global Python execution tracing hook using sys.settrace().
+    
+    Fails silently if the trace hook is already set or restricted.
     """
     try:
-        sys.settrace(_trace_interceptor)
+        sys.settrace(_execution_state_interceptor)
     except RuntimeError:
-        # Fails silently if tracing cannot be set (e.g., already running under a debugger
-        # that locks the trace hook, or in restricted environments).
+        # Graceful failure if tracing is disallowed or locked.
+        pass
+
+def deactivate_interceptor() -> None:
+    """
+    Deactivates the global tracing hook by setting it to None. 
+    (Best Practice for cleanup.)
+    """
+    try:
+        sys.settrace(None)
+    except RuntimeError:
         pass
 
 
-# --- Initialization ---
-# Activate the tracer immediately upon module import for instant effect.
-initialize_tracer()
+# --- Module Initialization ---
+# Immediate activation upon module import, satisfying the original requirement 
+# for instant effect.
+activate_interceptor()

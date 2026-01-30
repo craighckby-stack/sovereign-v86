@@ -1,27 +1,33 @@
 # Sovereign v86
 
-*An autonomous code refactoring agent that improved itself 
-through 106 iterations of recursive self-improvement 
-(rolled back to v86 for optimal performance)*
+An autonomous code refactoring agent that improved itself through 106 iterations of recursive self-improvement (rolled back to v86 for optimal performance).
 
-Built on free-tier APIs. MIT licensed. 
+Built on free-tier APIs. MIT Licensed.
 
+## Prerequisites
 
-How to 
+1.  **GitHub Repository:** Specify the target GitHub repository URL.
+2.  **GitHub Token:** A valid GitHub Personal Access Token with necessary permissions for cloning and pushing.
+3.  **Gemini API Key:** An API key for the Gemini model.
 
-input github repo and name
+## Configuration & Usage
 
-git token
+### Usage Workflow
 
-gemini api
+The agent requires the following inputs:
 
+*   GitHub Repository URL.
+*   GitHub Token.
+*   Gemini API Key.
 
-suggest use gemini lite model others way to constrictive.
+### Model Selection
 
+**Recommendation:** Utilize the `gemini-lite` model for cost efficiency and performance, as other models may introduce unnecessary overhead for standard refactoring tasks.
 
-commits direct to main over writing orgional.
+### Commit Strategy
 
+The agent commits changes directly to the `main` branch, overwriting the original code structure. Use with caution.
 
-add .txt to files you don't want touched.
+### Exclusion List
 
-
+To prevent modification of specific files, append the `.txt` extension to their filenames (e.g., `config.txt` will be ignored).

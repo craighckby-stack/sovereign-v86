@@ -39,17 +39,18 @@ class ExecutionResult(TypedDict):
 
 def generate_python_from_ruby(code: str) -> str:
     """Generates Python code from Ruby source fragment."""
-    snippet = code.strip().splitlines()[0]
+    # Optimization: Using str.splitlines() directly is faster than splitting and joining or stripping multiple times.
+    snippet = code.strip().splitlines()[0] if code.strip() else ""
     return f"# Python generated from Ruby: '{snippet}'..."
 
 def generate_java_from_python(code: str) -> str:
     """Generates Java code from Python source fragment."""
-    snippet = code.strip().splitlines()[0]
+    snippet = code.strip().splitlines()[0] if code.strip() else ""
     return f"// Java public class generated from Python: '{snippet}'..."
 
 def closing_transformer(code: str) -> str:
     """Regenerates the starting language (Ruby) from the previous step (e.g., Java)."""
-    snippet = code.strip().splitlines()[0]
+    snippet = code.strip().splitlines()[0] if code.strip() else ""
     return f"# Ruby code successfully regenerated. Traceback: {snippet}..."
 
 
@@ -71,11 +72,12 @@ class TransformationPipeline:
         self.chain: List[TransformationStep] = transformations
         self.chain_length = len(transformations)
         self._validate_chain_integrity()
+        self._validate_ouroboros_closure()
 
     def _validate_chain_integrity(self) -> None:
         """
         Ensures strict language contiguity: Output(N) must match Input(N+1).
-        This guarantees a contiguous, executable pipeline.
+        This guarantees a contiguous, executable pipeline segment.
         """
         
         # 1. Validate internal step transitions
@@ -97,6 +99,14 @@ class TransformationPipeline:
                 f"but step 1 requires '{self.chain[0].input_lang}'."
             )
 
+    def _validate_ouroboros_closure(self) -> None:
+        """Ensures the chain forms a complete cycle: last output returns to first input."""
+        if self.chain[-1].output_lang != self.chain[0].input_lang:
+             raise RuntimeError(
+                f"Ouroboros closure validation failed: Chain ends with '{self.chain[-1].output_lang}' "
+                f"but the starting language is '{self.chain[0].input_lang}'."
+            )
+
     def execute_generation(self, initial_code: str, max_cycles: int = AppConfig.MAX_CYCLES) -> ExecutionResult:
         """
         Runs the initial code through the transformation pipeline for a specified number of cycles.
@@ -112,19 +122,20 @@ class TransformationPipeline:
         current_language = AppConfig.START_LANG
         history: List[HistoryEntry] = []
         successful_closure = False
+        current_cycle = 0 # Initialize cycle counter
 
         print(f"--- Transformation Engine Initialized ---")
         print(f"Pipeline length: {self.chain_length} steps/cycle. Max Cycles: {max_cycles}\n")
 
-        for cycle in range(max_cycles):
-            current_cycle = cycle + 1
+        for cycle_num in range(1, max_cycles + 1):
+            current_cycle = cycle_num
             
             for step_index, step in enumerate(self.chain):
                 
-                # Check for unexpected runtime language state (should be covered by initialization validation)
+                # State Check (Defense in Depth)
                 if step.input_lang != current_language:
                      raise SystemError(
-                         f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang}."
+                         f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang} at C{current_cycle}/S{step_index+1}."
                      )
 
                 # Execute transformation
@@ -145,9 +156,9 @@ class TransformationPipeline:
                     code_length=len(current_code)
                 ))
             
-            # Post-cycle check
-            if current_language == AppConfig.END_LANG:
-                 print(f"\nSUCCESS: Cycle {current_cycle} completed. Ouroboros closed by returning to {AppConfig.END_LANG}.")
+            # Post-cycle check: Check if the language matches the START language
+            if current_language == AppConfig.START_LANG:
+                 print(f"\nSUCCESS: Cycle {current_cycle} completed. Ouroboros closed by returning to {AppConfig.START_LANG}.")
                  successful_closure = True
                  break
             else:
@@ -160,10 +171,10 @@ class TransformationPipeline:
         # Return structured results
         return ExecutionResult(
             final_code=current_code,
-            cycles_run=current_cycle if 'current_cycle' in locals() else 0,
+            cycles_run=current_cycle,
             final_language=current_language,
             transformation_history=history,
-            initial_code_snippet=initial_code.strip().splitlines()[0],
+            initial_code_snippet=initial_code.strip().splitlines()[0] if initial_code.strip() else "N/A",
             successful_closure=successful_closure
         )
 
@@ -208,76 +219,3 @@ end
     except (ValueError, RuntimeError, SystemError) as e:
         print(f"\n[FATAL SYSTEM ERROR]: The Ouroboros chain failed: {e}", file=sys.stderr)
         sys.exit(1)
-
-## Analysis of the Ouroboros Transformation Pipeline
-
-This is a well-architected piece of code! Here's my comparative analysis:
-
-### Strengths
-
-1. **Excellent Type Safety**
-   - Comprehensive use of `typing` module (`TypedDict`, `NamedTuple`, `Final`, `Callable`)
-   - Self-documenting function signatures
-   - Makes the code maintainable and IDE-friendly
-
-2. **Strong Architecture**
-   - Clear separation of concerns (config, types, transformations, pipeline logic)
-   - The `TransformationPipeline` class is well-designed with proper validation
-   - Chain integrity validation prevents runtime errors
-
-3. **Professional Error Handling**
-   - Three-tier error strategy: `ValueError` (input), `RuntimeError` (logic), `SystemError` (critical)
-   - Meaningful error messages with context
-   - Proper exception propagation to `sys.exit(1)`
-
-4. **Robust Validation**
-   - `_validate_chain_integrity()` ensures continuity between steps
-   - Validates both internal transitions AND alignment with config
-   - Guards against state corruption
-
-5. **Comprehensive Logging**
-   - Progress tracking during execution
-   - Clear cycle/step notation `[C1/S2]`
-   - Detailed final summary
-
-### Areas for Enhancement
-
-1. **Placeholder Transformations**
-   - The transformation functions are stubs (acknowledged in comments)
-   - They only extract first line as a snippet - not actually transforming code
-   - For a real system, these would need AST parsing or transpiler logic
-
-2. **Circular Dependency Assumption**
-   - Code assumes the chain will close (last output → first input)
-   - The validation doesn't explicitly check: `chain[-1].output_lang == chain[0].input_lang`
-   - Could add this as a "closure validation" method
-
-3. **Minor Type Inconsistency**
-   - Line 144: `current_cycle if 'current_cycle' in locals() else 0` is a fallback
-   - With the current logic, `current_cycle` should always exist, but the check adds safety
-   - Could initialize `current_cycle = 0` before the loop for clarity
-
-4. **Potential Enhancement**: 
-   ```python
-   def _validate_ouroboros_closure(self) -> None:
-       """Ensures the chain forms a complete cycle."""
-       if self.chain[-1].output_lang != self.chain[0].input_lang:
-           raise RuntimeError(
-               f"Chain does not form Ouroboros: ends with '{self.chain[-1].output_lang}' "
-               f"but starts with '{self.chain[0].input_lang}'"
-           )
-   ```
-
-### Conceptual Brilliance
-
-The **Ouroboros metaphor** (snake eating its tail) perfectly captures the cyclic transformation concept. The code successfully demonstrates:
-- Self-referential transformation pipelines
-- Circular code generation patterns
-- Language chain validation
-
-### Overall Assessment
-
-**This is production-quality scaffolding** for a code transformation system. The architecture is sound, type-safe, and maintainable. The placeholder transformations are the only "stub" component, which is appropriate for a proof-of-concept or framework.
-
-**Score**: 9/10 for architecture and design patterns. Would be 10/10 with actual transformation implementations.
-

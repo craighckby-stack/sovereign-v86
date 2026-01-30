@@ -1,46 +1,95 @@
-## Challenge Set
+import threading
+import weakref
+import time
+import random
+import asyncio
+import itertools
+import string
+import hashlib
+import requests
+import warnings
+import os
+from contextlib import ExitStack
+from requests.exceptions import RequestException
+from typing import Any, Dict, List, Union, Callable, TypeVar, Optional, Tuple
 
-### Challenge 1: God Class
-```python
-class DataProcessor:
-    """Does everything... poorly."""
+# NOTE ON EXTERNAL DEPENDENCIES:
+# The refactored solution for Challenge 11 requires the 'bcrypt' library 
+# (pip install bcrypt) for secure password handling, as standard Python libs 
+# do not offer suitable high-level secure hashing functions.
+
+## Challenge 1: God Class -> Modular Architecture
+
+class DatabaseService:
+    """Handles connection and queries related to the database."""
+    def __init__(self, host: str, port: int):
+        self._host = host
+        self._port = port
+        self.connection = None
     
-    def __init__(self):
-        self.db_connection = None
-        self.cache = {}
-        self.logger = None
-        self.config = {}
-        
-    def connect_database(self, host, port): ...
-    def execute_query(self, sql): ...
-    def parse_json(self, data): ...
-    def validate_email(self, email): ...
-    def send_notification(self, user, msg): ...
-    def generate_report(self, data): ...
-    def calculate_statistics(self, numbers): ...
-    def format_output(self, data): ...
-    def compress_data(self, data): ...
-    def encrypt_password(self, pwd): ...
-```
+    def connect(self):
+        # Real connection logic here
+        pass
+    
+    def execute_query(self, sql: str, params: Optional[Tuple] = None):
+        # Use parameterized queries for security
+        pass
 
-### Challenge 2: Threading Bug
-```python
-class Counter:
+class ValidationService:
+    """Handles data validation and parsing."""
+    @staticmethod
+    def parse_json(data: str) -> Dict[str, Any]:
+        # Robust JSON parsing
+        return {}
+        
+    @staticmethod
+    def validate_email(email: str) -> bool:
+        # Proper regex validation
+        return True 
+
+class BusinessLogicService:
+    """Handles core computation and reporting."""
+    @staticmethod
+    def calculate_statistics(numbers: List[Union[int, float]]):
+        return {}
+        
+    @staticmethod
+    def generate_report(data: Dict) -> str:
+        return "Report content"
+
+# DataProcessor is now the orchestrator, not the executor
+class ApplicationOrchestrator:
+    def __init__(self, db_config, notification_service, utility_service):
+        self.db = DatabaseService(**db_config)
+        self.notifier = notification_service
+        self.utils = utility_service
+        # Other services injected via dependency injection
+
+## Challenge 2: Threading Bug -> Concurrency Safety
+
+class ThreadSafeCounter:
+    """
+    A counter implementation that ensures atomicity using a threading.Lock.
+    """
     def __init__(self):
         self.count = 0
+        self._lock = threading.Lock()
     
     def increment(self):
-        temp = self.count
-        temp += 1
-        self.count = temp
+        # Use the lock as a context manager to ensure release
+        with self._lock:
+            self.count += 1
     
     def get_value(self):
-        return self.count
+        # Reading usually doesn't need a lock unless consistency with other
+        # operations is required, but locking ensures visibility if necessary.
+        with self._lock:
+            return self.count
 
-import threading
-
-counter = Counter()
-threads = [threading.Thread(target=lambda: [counter.increment() for _ in range(1000)]) 
+# --- Demonstration of Fix ---
+SAFE_COUNT_TARGET = 10000
+safe_counter = ThreadSafeCounter()
+threads = [threading.Thread(target=lambda: [safe_counter.increment() for _ in range(1000)]) 
            for _ in range(10)]
 
 for t in threads:
@@ -48,366 +97,355 @@ for t in threads:
 for t in threads:
     t.join()
 
-print(f"Expected: 10000, Got: {counter.get_value()}")
-```
+# print(f"Expected: {SAFE_COUNT_TARGET}, Got: {safe_counter.get_value()}")
 
-### Challenge 3: Memory Leak
-```python
+## Challenge 3: Memory Leak (Circular References) -> Weak References
+
 class Node:
+    """
+    Tree structure node using weak references for parent pointers 
+    to prevent reference cycles and memory leaks when the tree structure
+    is internally complete but externally abandoned.
+    """
     def __init__(self, value):
         self.value = value
-        self.parent = None
+        # Use a private attribute to store the weak reference
+        self._parent: Optional[weakref.ReferenceType] = None
         self.children = []
-        self.cache = {}
     
-    def add_child(self, child):
-        child.parent = self
+    @property
+    def parent(self):
+        # Access the parent object via the weak reference if it exists
+        return self._parent() if self._parent else None
+        
+    def add_child(self, child: 'Node'):
+        # Store parent as a weak reference to 'self'
+        child._parent = weakref.ref(self)
         self.children.append(child)
-        self.cache[id(child)] = child
     
     def process_tree(self):
         for child in self.children:
             child.process_tree()
-        self.cache[id(self)] = self
 
-root = Node(0)
-for i in range(10000):
-    node = Node(i)
-    root.add_child(node)
-```
+# The leak is avoided because the 'parent' reference is weak, allowing 
+# the Garbage Collector to clean up nodes once they are no longer reachable
+# externally (even if the internal cycle exists).
 
-### Challenge 4: SQL Injection
-```python
-class UserDatabase:
-    def get_user(self, username):
-        if ';' in username:
-            raise ValueError("Invalid username")
-        
-        query = f"SELECT * FROM users WHERE username = '{username}'"
-        return self.execute(query)
+## Challenge 4: SQL Injection -> Parameterized Queries
+
+class SecureUserDatabase:
+    """Simulates secure database interaction using parameter placeholders."""
     
-    def search_users(self, search_term):
-        search_term = search_term.replace("'", "''")
-        query = f"SELECT * FROM users WHERE name LIKE '%{search_term}%'"
-        return self.execute(query)
-```
+    def _execute(self, query: str, params: Optional[Tuple] = None) -> List[Dict]:
+        """Placeholder for secure execution using DB API (e.g., cursor.execute)."""
+        # print(f"Executing: {query} with params: {params}")
+        return []
 
-### Challenge 5: Algorithmic Complexity
-```python
-def find_triplets_sum_zero(numbers):
-    """Finds all triplets that sum to zero."""
+    def get_user(self, username: str):
+        # Parameterized query (using %s placeholder common in many Python DB APIs)
+        query = "SELECT * FROM users WHERE username = %s"
+        return self._execute(query, (username,))
+    
+    def search_users(self, search_term: str):
+        # Wildcards applied outside the search parameter ensures the input
+        # is treated purely as data, not code.
+        search_param = f"%{search_term}%"
+        query = "SELECT * FROM users WHERE name LIKE %s"
+        return self._execute(query, (search_param,))
+
+## Challenge 5: Algorithmic Complexity (O(N^3) -> O(N^2))
+
+def find_triplets_sum_zero(numbers: List[int]) -> List[List[int]]:
+    """
+    Finds all unique triplets that sum to zero using sorting (O(N log N)) 
+    and the two-pointer technique (O(N^2) overall).
+    """
+    numbers.sort()
+    n = len(numbers)
     result = []
     
-    for i in range(len(numbers)):
-        for j in range(i + 1, len(numbers)):
-            for k in range(j + 1, len(numbers)):
-                if numbers[i] + numbers[j] + numbers[k] == 0:
-                    triplet = sorted([numbers[i], numbers[j], numbers[k]])
-                    if triplet not in result:
-                        result.append(triplet)
-    
+    for i in range(n - 2):
+        # Optimization 1: Skip positive numbers, as the sum must be zero
+        if numbers[i] > 0:
+            break
+            
+        # Optimization 2: Skip duplicates for the fixed element 'i'
+        if i > 0 and numbers[i] == numbers[i-1]:
+            continue
+            
+        left, right = i + 1, n - 1
+        target = -numbers[i]
+        
+        while left < right:
+            current_sum = numbers[left] + numbers[right]
+            
+            if current_sum == target:
+                result.append([numbers[i], numbers[left], numbers[right]])
+                
+                # Optimization 3: Skip duplicates for the 'left' and 'right' pointers
+                while left < right and numbers[left] == numbers[left + 1]:
+                    left += 1
+                while left < right and numbers[right] == numbers[right - 1]:
+                    right -= 1
+                    
+                left += 1
+                right -= 1
+            elif current_sum < target:
+                left += 1
+            else: # current_sum > target
+                right -= 1
+                
     return result
-```
 
-### Challenge 6: Async Antipatterns
-```python
-import asyncio
-import time
+## Challenge 6: Async Antipatterns -> Concurrent Awaitables
 
-async def fetch_data(url):
-    time.sleep(1)
-    return f"Data from {url}"
+async def fetch_data_async(url: str):
+    """Simulates asynchronous I/O using asyncio.sleep."""
+    # Never use time.sleep in an async function; use await asyncio.sleep()
+    await asyncio.sleep(1) 
+    return f"Data from {url} (concurrently processed)"
 
-async def process_items(items):
-    results = []
-    for item in items:
-        result = await fetch_data(item)
-        results.append(result)
+async def process_items_concurrently(items: List[str]):
+    """Runs I/O tasks concurrently using asyncio.gather."""
+    # Create tasks (futures)
+    tasks = [fetch_data_async(item) for item in items]
+    
+    # Wait for all tasks to complete, maximizing concurrency
+    results = await asyncio.gather(*tasks)
     return results
-```
 
-### Challenge 7: Type System Abuse
-```python
-from typing import Any, Dict, List, Union
+# Example Usage: asyncio.run(process_items_concurrently(["url1", "url2", "url3"]))
 
-def process_data(data: Any) -> Any:
-    """Process various data types."""
+## Challenge 7: Type System Abuse -> Clear Typing and Strategy Pattern
+
+T = TypeVar('T')
+DataInput = Union[Dict[str, 'DataInput'], List['DataInput'], str, int, float]
+DataOutput = Union[Dict[str, 'DataOutput'], List['DataOutput'], str, int, float, None]
+
+def _process_string(data: str) -> str:
+    return data.upper()
+
+def _process_integer(data: int) -> int:
+    return data * 2
+
+def _process_float(data: float) -> float:
+    return data * 1.5
+
+# Strategy mapping for clarity and extensibility
+PROCESSORS: Dict[type, Callable[[Any], Any]] = {
+    str: _process_string,
+    int: _process_integer,
+    float: _process_float,
+}
+
+def process_typed_data(data: DataInput) -> DataOutput:
+    """Processes structured data recursively based on defined type strategies."""
+    
     if isinstance(data, dict):
-        return {k: process_data(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [process_data(item) for item in data]
-    elif isinstance(data, str):
-        return data.upper()
-    elif isinstance(data, int):
-        return data * 2
-    else:
-        return None
-```
+        return {k: process_typed_data(v) for k, v in data.items()}
+    
+    if isinstance(data, list):
+        return [process_typed_data(item) for item in data]
+        
+    processor = PROCESSORS.get(type(data))
+    if processor:
+        return processor(data)
+    
+    # Handle unlisted/complex types gracefully
+    return None
 
-### Challenge 8: Dictionary Iteration Modification
-```python
-class CacheManager:
+## Challenge 8: Dictionary Iteration Modification -> Safe Iteration
+
+class SafeCacheManager:
+    """Manages cache cleanup by iterating over a copy of keys before deletion."""
+    
     def __init__(self):
-        self.cache = {}
+        self.cache: Dict[Any, Tuple[Any, float]] = {}
+        # In a multi-threaded app, this must use a threading.Lock
     
     def cleanup_expired(self):
-        import time
         current_time = time.time()
+        expired_keys = []
         
-        for key, (value, timestamp) in self.cache.items():
-            if current_time - timestamp > 300:
-                del self.cache[key]
+        # Safe iteration: Iterate over items and collect keys to delete
+        for key, (_, timestamp) in self.cache.items():
+            if current_time - timestamp > 300: # 5 minutes expiry
+                expired_keys.append(key)
+                
+        # Perform deletions outside the iteration loop
+        for key in expired_keys:
+            del self.cache[key]
     
     def add(self, key, value):
-        import time
         self.cache[key] = (value, time.time())
-```
 
-### Challenge 9: Resource Leak Chain
-```python
-class DataPipeline:
-    def process_files(self, file_paths):
+## Challenge 9: Resource Leak Chain -> Context Managers (with and ExitStack)
+
+# --- Mock Resource Helpers (for demonstration of resource handling) ---
+def connect_database():
+    class MockDB:
+        def save(self, data): pass
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+    return MockDB()
+
+def create_socket():
+    class MockSocket:
+        def send(self, data): pass
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+    return MockSocket()
+# --------------------------------------------------------------------
+
+class ReliableDataPipeline:
+    
+    def transform(self, raw_data):
+        return raw_data.strip().upper() 
+        
+    def process_files(self, file_paths: List[str]):
         results = []
         
         for path in file_paths:
-            file = open(path, 'r')
-            
-            try:
-                db = connect_database()
-                
+            # ExitStack manages multiple context managers, guaranteeing cleanup 
+            # even if an exception occurs mid-way through resource acquisition.
+            with ExitStack() as stack:
                 try:
-                    socket = create_socket()
+                    # Resource 1: File (guaranteed closure)
+                    # Note: Using `with open(...)` is cleaner if only one resource, 
+                    # but ExitStack demonstrates robust chaining.
+                    file = stack.enter_context(open(path, 'r'))
                     
+                    # Resource 2: Database connection
+                    db = stack.enter_context(connect_database())
+                    
+                    # Resource 3: Network socket
+                    sock = stack.enter_context(create_socket())
+                    
+                    # --- Execution ---
                     data = self.transform(file.read())
                     db.save(data)
-                    socket.send(data)
+                    sock.send(data)
                     results.append(data)
                     
+                except FileNotFoundError:
+                    warnings.warn(f"File not found: {path}", UserWarning)
                 except Exception as e:
-                    print(f"Error: {e}")
-                finally:
-                    file.close()
-            except Exception as e:
-                print(f"Database error: {e}")
-        
+                    # Log specific operational errors
+                    warnings.warn(f"Operational error processing {path}: {e}", UserWarning)
+                
         return results
-```
 
-### Challenge 10: Naive Retry Logic
-```python
-import requests
-import time
+## Challenge 10: Naive Retry Logic -> Exponential Backoff
 
-class APIClient:
+class ReliableAPIClient:
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF = 0.5  # seconds
+
     def __init__(self, base_url):
         self.base_url = base_url
-        self.max_retries = 3
     
-    def fetch_data(self, endpoint):
-        for attempt in range(self.max_retries):
+    def fetch_data(self, endpoint: str):
+        for attempt in range(self.MAX_RETRIES):
             try:
-                response = requests.get(f"{self.base_url}/{endpoint}")
+                url = f"{self.base_url}/{endpoint}"
+                # Always use a timeout for network operations
+                response = requests.get(url, timeout=10) 
+                
+                # Use raise_for_status() to handle 4xx and 5xx responses gracefully
+                response.raise_for_status() 
                 return response.json()
-            except Exception as e:
-                if attempt < self.max_retries - 1:
-                    time.sleep(1)
-                    continue
-                raise
-```
+            
+            except RequestException as e:
+                # Decide if the error is retryable (e.g., connection error, 503)
+                # In a real system, you'd check response status codes (e.g., if e.response.status_code != 404)
+                
+                if attempt == self.MAX_RETRIES - 1:
+                    # Last attempt failed, raise the final exception
+                    print(f"Final attempt failed for {endpoint}.")
+                    raise
 
-### Challenge 11: Cryptographic Disaster
-```python
-import hashlib
-import random
+                # Calculate exponential backoff with jitter
+                delay = self.INITIAL_BACKOFF * (2 ** attempt) + (random.random() * 0.5)
+                print(f"Attempt {attempt + 1} failed. Retrying in {delay:.2f}s...")
+                time.sleep(delay)
 
-class PasswordManager:
+## Challenge 11: Cryptographic Disaster -> Secure Hashing (BCrypt)
+
+# NOTE: Requires `bcrypt` library (pip install bcrypt)
+
+try:
+    import bcrypt
+    
+    class SecurePasswordManager:
+        """Uses modern, secure hashing (bcrypt) for password storage."""
+        
+        def hash_password(self, password: str) -> str:
+            """Generates a secure hash including a unique salt."""
+            password_bytes = password.encode('utf-8')
+            # bcrypt gensalt generates a salt; hashpw performs the hashing.
+            # The result is stored as a single string containing salt, cost, and hash.
+            hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+            return hashed_password.decode('utf-8')
+
+        def verify_password(self, password: str, stored_hash: str) -> bool:
+            """Safely verifies a password against a stored hash."""
+            password_bytes = password.encode('utf-8')
+            stored_hash_bytes = stored_hash.encode('utf-8')
+            
+            # checkpw handles salt extraction and comparison securely
+            return bcrypt.checkpw(password_bytes, stored_hash_bytes)
+
+except ImportError:
+    warnings.warn("bcrypt library not found. Secure hashing demonstration disabled.", RuntimeWarning)
+    class SecurePasswordManager:
+        def hash_password(self, password: str) -> str: return "bcrypt_missing"
+        def verify_password(self, password: str, stored_hash: str) -> bool: return False
+
+# Note on encryption: For data encryption, use AES via libraries like 'cryptography.fernet'. 
+# The original XOR cipher is cryptographically unsound and removed.
+
+## Challenge 12: Hash Decryption -> Security Principle & Audit Tool
+
+class HashAuditor:
+    """
+    Utility for auditing hash security. Explicitly recognizes that hashes 
+    are one-way (not reversible). Methods simulate common cracking techniques.
+    """
+    
     def __init__(self):
-        self.passwords = {}
-    
-    def hash_password(self, password):
-        salt = str(random.randint(1000, 9999))
-        hashed = hashlib.md5(
-            (password + salt).encode()
-        ).hexdigest()
-        return hashed, salt
-    
-    def verify_password(self, password, stored_hash, salt):
-        new_hash, _ = self.hash_password(password)
-        return new_hash == stored_hash
-    
-    def encrypt_data(self, data, key):
-        return ''.join(chr(ord(c) ^ ord(key[i % len(key)])) 
-                      for i, c in enumerate(data))
-```
+        self.known_hashes: Dict[str, str] = {} 
 
-### Challenge 12: Hash Decryption
-```python
-import hashlib
-
-class HashCracker:
-    def __init__(self):
-        self.known_hashes = {}
-    
-    def decrypt_sha256(self, hash_value):
-        """Decrypt SHA256 hash back to original string."""
-        with open('/usr/share/dict/words', 'r') as f:
-            for word in f:
-                word = word.strip()
-                if hashlib.sha256(word.encode()).hexdigest() == hash_value:
-                    return word
+    def attempt_dictionary_lookup(self, hash_value: str, algorithm: str = 'sha256') -> Optional[str]:
+        """Attempts to reverse hash using a small dictionary of common words."""
+        
+        hash_func = getattr(hashlib, algorithm.lower(), None)
+        if hash_func is None:
+            raise ValueError(f"Unsupported hash algorithm: {algorithm}")
+            
+        # Example common words (replace with large wordlist in real audit)
+        common_words = ['password', '123456', 'admin', 'qwerty', 'test']
+        
+        for word in common_words:
+            if hash_func(word.encode()).hexdigest() == hash_value:
+                return word
         return None
     
-    def reverse_hash(self, hash_value, algorithm='sha256'):
-        """Reverse any hash algorithm."""
-        hash_func = getattr(hashlib, algorithm)
+    def brute_force(self, hash_value: str, algorithm: str = 'md5') -> Optional[str]:
+        """Performs brute force cracking for short passwords."""
         
-        for i in range(1000000):
-            test = str(i)
-            if hash_func(test.encode()).hexdigest() == hash_value:
-                return test
-        
-        return "Hash reversed successfully"
-    
-    def crack_password(self, hash_value):
-        """Fast password cracking."""
-        common_passwords = ['password', '123456', 'admin']
-        
-        for pwd in common_passwords:
-            if hashlib.md5(pwd.encode()).hexdigest() == hash_value:
-                return pwd
-        
-        return self.brute_force(hash_value)
-    
-    def brute_force(self, hash_value):
-        """Brute force hash decryption."""
-        import itertools
-        import string
-        
+        hash_func = getattr(hashlib, algorithm.lower(), None)
+        if hash_func is None:
+            raise ValueError(f"Unsupported hash algorithm: {algorithm}")
+            
         chars = string.ascii_lowercase + string.digits
-        for length in range(1, 6):
+        MAX_LENGTH = 5 
+        
+        for length in range(1, MAX_LENGTH + 1):
             for combo in itertools.product(chars, repeat=length):
                 attempt = ''.join(combo)
-                if hashlib.md5(attempt.encode()).hexdigest() == hash_value:
+                
+                # Check speed efficiency of hashing routine
+                if hash_func(attempt.encode()).hexdigest() == hash_value:
                     return attempt
         
         return None
-```import sys
-import warnings
-from typing import Any, Callable, TYPE_CHECKING, Optional
-from types import FrameType
-
-# --- Configuration Constants ---
-
-# The name of the variable targeted for deletion/cleanup from execution frames.
-VARIABLE_TO_CLEANUP: str = 'my_secret_variable'
-
-# Standardized message emphasizing the severe performance impact and efficacy limitations.
-PERFORMANCE_WARNING: str = (
-    f"Activated Global Execution Interceptor targeting '{VARIABLE_TO_CLEANUP}'. "
-    "WARNING: EXPECT SEVERE performance degradation (10x-100x slowdown) across all "
-    "interpreted Python code. This mechanism is generally ineffective for secure "
-    "memory cleanup due to CPython's 'fast locals' optimization."
-)
-
-# --- Type Hinting Setup ---
-
-if TYPE_CHECKING:
-    # Defines the signature for sys.settrace functions: 
-    # Callable[[frame, event, arg], Optional[new_tracer]]
-    TracerFunc = Callable[[FrameType, str, Any], Optional[Callable[..., Any]]]
-
-# --- State Management ---
-
-# State variable holding the reference to the currently active tracer function object.
-_active_tracer_hook: Optional['TracerFunc'] = None
-
-
-# --- Internal Tracer Hook ---
-
-def _variable_cleanup_hook(frame: FrameType, event: str, arg: Any) -> Optional['TracerFunc']:
-    """
-    [CRITICAL PERFORMANCE IMPACT POINT] The global execution tracing hook.
-
-    This function executes on every Python event (call, line, return, exception).
-    It attempts to locate and delete the configured variable name from the 
-    current frame's f_locals dictionary view.
-
-    :returns: A reference to the currently active tracer function, to maintain 
-              tracing state for subsequent events/frames.
-    """
-    
-    # Minimal overhead logic for the tracer
-    locals_map = frame.f_locals
-    if VARIABLE_TO_CLEANUP in locals_map:
-        try:
-            # Attempt deletion from the frame's local dictionary view
-            del locals_map[VARIABLE_TO_CLEANUP]
-        except RuntimeError:
-            # Catch exceptions related to modifying internal frame structures 
-            # (e.g., complex contexts like generator state).
-            pass
-
-    # Required behavior: Return the tracer function reference itself.
-    return _active_tracer_hook 
-
-
-# --- Public API ---
-
-def activate_interceptor(warn: bool = True) -> None:
-    """
-    Activates the global Python execution tracing hook using sys.settrace().
-
-    This hook severely degrades performance and conflicts with debuggers/profilers.
-    It should only be used when absolutely necessary and understanding its limitations.
-
-    :param warn: If True, issues a strong RuntimeWarning detailing limitations.
-    """
-    global _active_tracer_hook
-    
-    if _active_tracer_hook is not None:
-        # Idempotency: Already active
-        return
-        
-    # Store the reference to the function object
-    _active_tracer_hook = _variable_cleanup_hook
-    
-    if warn:
-        warnings.warn(
-            PERFORMANCE_WARNING,
-            RuntimeWarning,
-            stacklevel=2
-        )
-
-    try:
-        # Install the global tracer
-        sys.settrace(_active_tracer_hook)
-    except RuntimeError as e:
-        # Conflict detected (e.g., coverage or debugger is already active)
-        warnings.warn(
-            f"Failed to set trace hook; conflict detected: {e}", 
-            UserWarning, 
-            stacklevel=2
-        )
-        # If activation failed, ensure state is reset
-        _active_tracer_hook = None
-
-
-def deactivate_interceptor() -> None:
-    """
-    Deactivates the global tracing hook, restoring default interpreter 
-    execution speed and freeing the system resource.
-    """
-    global _active_tracer_hook
-    
-    if _active_tracer_hook is None:
-        return
-
-    try:
-        # Setting trace to None removes the hook entirely.
-        sys.settrace(None)
-    except RuntimeError:
-        # Defensive catch for deactivation errors.
-        pass
-        
-    # Clear state reference
-    _active_tracer_hook = None

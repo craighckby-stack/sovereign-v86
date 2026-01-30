@@ -1,26 +1,39 @@
 """
-This module serves as a polyglot source file, designed to produce different outputs
-when interpreted by Python, C, and Java compilers/interpreters.
+Polyglot Source Module
 
-The C and Java source code blocks are embedded within this module's primary docstring.
-Python ignores this docstring; C and Java parsers utilize their respective blocks.
+This file is designed to produce different outputs when interpreted by Python,
+compiled by C, or compiled by Java.
+
+The C and Java source code blocks are embedded below, guarded by Python comments (#).
+This ensures Python execution is clean, while the C/Java source can be extracted
+or compiled directly if the compiler/toolchain is configured to handle the structure.
+
+Python Output: Hello
+C Output: World
+Java Output: !
 """
 
-# --- Configuration & Metadata ---
-# Constants are generally preferred over raw literals for clarity.
-FILE_DESCRIPTION = "Polyglot Code Execution Demonstrator"
-PYTHON_OUTPUT = "Hello"
+# --- Configuration & Metadata (Python) ---
+__author__ = "Senior Software Architect"
+__version__ = "1.1.0"
+PYTHON_GREETING = "Hello"
 
-# --- C Source Block (Starts after Python docstring) ---
-# This block is commented out in Python but intended for C compilation.
+
+# --- C Source Block (Intended for C Compilation) ---
 #
 # #include <stdio.h>
-# int main() {
+#
+# int main(void) {
+#     /* C standard practice to use void when no arguments expected */
 #     printf("World\n");
 #     return 0;
 # }
 
-# --- Java Source Block (Embedded within docstring comments) ---
+
+# --- Java Source Block (Intended for Java Compilation) ---
+# The Java block is wrapped in C-style multi-line comments (/* ... */)
+# for maximum compatibility if blocks were extracted/merged.
+#
 # /*
 # class PolyglotOutput {
 #     public static void main(String[] args) {
@@ -29,12 +42,13 @@ PYTHON_OUTPUT = "Hello"
 # }
 # */
 
+
 # --- Python Execution Logic ---
-# Python execution starts here, skipping the preceding docstring.
+
+def execute_python_output():
+    """Main execution entry point for the Python interpreter."""
+    print(PYTHON_GREETING)
+
 
 if __name__ == '__main__':
-    """
-    Main execution block for Python.
-    If this file is run directly via the Python interpreter, it prints 'Hello'.
-    """
-    print(PYTHON_OUTPUT)
+    execute_python_output()

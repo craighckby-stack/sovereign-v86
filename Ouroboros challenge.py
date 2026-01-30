@@ -1,50 +1,41 @@
-# This file seems to be a description or placeholder for a complex,
-# self-referential code generation challenge (the "Ouroboros" concept).
-# As an architect, my refactoring focuses on turning this descriptive text
-# into a structured representation suitable for execution or modeling,
-# adhering to Python best practices (PEP 8, type hinting, clear structure).
+# This file models the structure and execution flow of a self-referential
+# code generation challenge ("Ouroboros") using established software architecture
+# patterns, type hinting, and modular design.
 
 from typing import List, Tuple, Callable, Dict, Any
 
-# --- Core Concepts & Constants ---
-
+# --- Configuration Constants ---
+# Defines system boundaries and targets.
 MAX_ITERATIONS = 100
 STARTING_LANGUAGE = "Ruby"
 ENDING_LANGUAGE = "Ruby"
 
-# Representation of a transformation step in the chain
+# --- Type Definitions ---
+# A transformation step is defined by its input language, output language, and the generator function.
 TransformationStep = Tuple[str, str, Callable[[str], str]]
 
-# --- Placeholder Transformation Logic ---
-# In a real scenario, these functions would contain complex code generation logic.
-# For this architectural refactoring, we define simple placeholders to model the flow.
+# --- Transformation Logic (Placeholders) ---
+# In a production system, these would contain sophisticated code parsers/generators.
 
 def ruby_to_python(code: str) -> str:
     """Simulates Ruby code generating Python code."""
-    # print(f"Transforming Ruby code into Python...")
-    return f"# Python code generated from {code}"
+    return f"# Python generated from Ruby source fragment: {code.strip()[:30]}..."
 
 def python_to_java(code: str) -> str:
     """Simulates Python code generating Java code."""
-    # print(f"Transforming Python code into Java...")
-    return f"// Java code generated from {code}"
+    return f"// Java public class generated from Python: {code.strip()[:30]}..."
 
-# Add more transformations as needed (e.g., java_to_javascript, ...)
-
-# --- The Ouroboros System Definition ---
+# --- Ouroboros System Core ---
 
 class OuroborosCompiler:
     """
-    Models the self-referential code generation challenge spanning multiple languages.
-    This structure allows for easy extension and tracking of the transformation path.
+    Manages and executes the sequence of language transformations intended to 
+    cycle back to the starting language.
     """
 
     def __init__(self, transformations: List[TransformationStep]):
         """
-        Initializes the compiler chain.
-
-        Args:
-            transformations: A sequence of (InputLang, OutputLang, GeneratorFunc) tuples.
+        Initializes the compiler chain and validates its structural integrity.
         """
         if not transformations:
             raise ValueError("Transformation sequence cannot be empty.")
@@ -53,102 +44,110 @@ class OuroborosCompiler:
         self._validate_chain_integrity()
 
     def _validate_chain_integrity(self) -> None:
-        """Ensures the output language of step N matches the input language of step N+1."""
+        """
+        Ensures that the output language of step N matches the input language of step N+1.
+        This guarantees a contiguous, executable pipeline.
+        """
         for i in range(len(self.chain) - 1):
-            current_output_lang = self.chain[i][1]
-            next_input_lang = self.chain[i+1][0]
+            _, current_output_lang, _ = self.chain[i]
+            next_input_lang, _, _ = self.chain[i+1]
+            
             if current_output_lang != next_input_lang:
                 raise RuntimeError(
-                    f"Chain discontinuity detected at step {i}: "
-                    f"Output '{current_output_lang}' does not match next input '{next_input_lang}'."
+                    f"Chain discontinuity at step {i}: "
+                    f"Output '{current_output_lang}' mismatches next input '{next_input_lang}'."
                 )
 
     def execute_generation(self, initial_code: str, max_steps: int = MAX_ITERATIONS) -> Dict[str, Any]:
         """
-        Runs the initial code through the entire transformation pipeline.
+        Runs the initial code through the defined transformation pipeline for a specified number of cycles.
 
         Args:
-            initial_code: The source code in the starting language.
-            max_steps: The maximum number of full pipeline cycles to attempt (usually 1 for this setup).
+            initial_code: The source code in the STARTING_LANGUAGE.
+            max_steps: The maximum number of full pipeline cycles to execute.
 
         Returns:
             A dictionary containing the final result and execution metadata.
         """
         current_code = initial_code
         current_language = STARTING_LANGUAGE
-        history = []
+        history: List[Dict[str, Any]] = []
 
-        print(f"Starting Ouroboros Challenge simulation ({len(self.chain)} steps per cycle)...")
+        print(f"--- Compiler Initializing ---")
+        print(f"Chain Length: {len(self.chain)} steps per cycle.")
+        print(f"Max Cycles: {max_steps}")
 
         for cycle in range(max_steps):
-            previous_code = current_code
             
-            for input_lang, output_lang, generator_func in self.chain:
+            for step_index, (input_lang, output_lang, generator_func) in enumerate(self.chain):
                 
                 if input_lang != current_language:
-                    # This check should ideally pass if the chain is validated, 
-                    # but serves as a runtime safeguard.
-                    raise RuntimeError(f"Expected {current_language}, but transformation expects {input_lang}")
+                    # This should only trigger if the initial language setup is wrong, 
+                    # as _validate_chain_integrity should prevent runtime mismatches within the loop.
+                    raise RuntimeError(f"Runtime error: Expected {current_language} but transformer requires {input_lang}")
 
-                # Perform the transformation
+                # Execute transformation
                 current_code = generator_func(current_code)
                 current_language = output_lang
                 
                 history.append({
                     "cycle": cycle + 1,
-                    "step": len(history) + 1,
+                    "step_in_cycle": step_index + 1,
                     "input_lang": input_lang,
                     "output_lang": output_lang,
-                    "code_fragment_length": len(current_code)
+                    "code_length": len(current_code)
                 })
             
-            # After one full cycle of transformations:
-            print(f"Cycle {cycle + 1} complete. Final output language: {current_language}")
-
-            # Check for self-reference completion (final output == starting language)
-            if current_language == ENDING_LANGUAGE and cycle == 0:
-                 print("\n--- Ouroboros Goal Achieved in One Cycle ---")
+            # Post-cycle check: Did we return to the target language?
+            if current_language == ENDING_LANGUAGE:
+                 print(f"\nSUCCESS: Cycle {cycle + 1} completed. Returned to {ENDING_LANGUAGE}.")
+                 if cycle == 0:
+                     print("Ouroboros closed in a single traversal.")
                  break
             
-            if cycle >= max_steps - 1:
-                print(f"\nWarning: Reached maximum iterations ({max_steps}) without a defined stopping condition other than iteration count.")
-
+            if cycle + 1 == max_steps:
+                print(f"\nWARNING: Max iterations ({max_steps}) reached. Final language is {current_language}.")
 
         return {
             "final_code": current_code,
-            "iterations_run": cycle + 1,
+            "iterations_run": cycle + 1 if 'cycle' in locals() else 0,
             "final_language": current_language,
             "transformation_history": history,
-            "initial_code_snippet": initial_code[:50] + "..."
+            "initial_code_snippet": initial_code.strip().splitlines()[0]
         }
 
-# --- Example Usage ---
+# --- Execution Block ---
 
 if __name__ == "__main__":
-    # Define the known steps from the description
+    
+    # Define the explicit chain needed to fulfill the Ouroboros condition (Ruby -> ... -> Ruby)
+    closing_transformer = lambda code: f"// Ruby code successfully regenerated from the previous state: {code.strip()[:30]}..."
+    
     chain_of_custody: List[TransformationStep] = [
         (STARTING_LANGUAGE, "Python", ruby_to_python),
         ("Python", "Java", python_to_java),
-        # ... 98 more steps would be defined here ...
-        # For simulation, we need a step that leads back to Ruby to close the loop
-        ("Java", STARTING_LANGUAGE, lambda code: f"// Ruby code regenerated from {code}"),
+        ("Java", STARTING_LANGUAGE, closing_transformer),
     ]
 
-    # The initial Ruby code payload
     initial_ruby_payload = """
     def ouroboros_start
-      puts "Hello from Ruby"
+      puts "Initiating self-replication sequence."
     end
     """
 
-    compiler = OuroborosCompiler(chain_of_custody)
-    
-    # Since the description implies one full pass of N languages results in the start language,
-    # we set max_steps=1 to demonstrate the full cycle defined by the chain.
-    results = compiler.execute_generation(initial_ruby_payload, max_steps=1)
+    try:
+        compiler = OuroborosCompiler(chain_of_custody)
+        
+        # Run exactly one full cycle to prove the chain closes itself.
+        results = compiler.execute_generation(initial_ruby_payload, max_steps=1)
 
-    print("\n--- Execution Summary ---")
-    print(f"Total Transformations Performed: {len(results['transformation_history'])}")
-    print(f"Final Language: {results['final_language']}")
-    print("Final Output Snippet:")
-    print(results['final_code'])
+        print("\n--- Execution Summary ---")
+        print(f"Start Code Snippet: {results['initial_code_snippet']}")
+        print(f"Total Transformations Executed: {len(results['transformation_history'])}")
+        print(f"Cycles Run: {results['iterations_run']}")
+        print(f"Final Language: {results['final_language']}")
+        print("\n--- Final Output Code ---")
+        print(results['final_code'])
+
+    except (ValueError, RuntimeError) as e:
+        print(f"\n[FATAL ERROR]: Compiler setup failed: {e}")

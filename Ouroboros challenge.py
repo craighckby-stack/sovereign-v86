@@ -41,7 +41,6 @@ def _extract_first_line(code: str) -> str:
     if not code:
         return "N/A"
     
-    # Use list comprehension for efficiency in stripping and filtering empty lines
     lines = [line.strip() for line in code.splitlines() if line.strip()]
     return lines[0] if lines else "N/A"
 
@@ -87,34 +86,38 @@ class TransformationPipeline:
 
     def _validate_chain_integrity(self) -> None:
         """
-        Ensures strict language contiguity: Output(N) must match Input(N+1).
+        Ensures strict language contiguity: Output(N) must match Input(N+1) and 
+        the chain starts correctly.
         """
         
-        # 1. Validate internal step transitions
-        for i in range(self.chain_length - 1):
-            current_output_lang = self.chain[i].output_lang
-            next_input_lang = self.chain[i+1].input_lang
-            
-            if current_output_lang != next_input_lang:
-                raise RuntimeError(
-                    f"Chain discontinuity detected at step {i+1}: "
-                    f"Output language '{current_output_lang}' mismatches "
-                    f"next input language '{next_input_lang}'."
-                )
-
-        # 2. Validate chain start aligns with configuration
+        # 1. Validate chain start aligns with configuration
         if self.chain[0].input_lang != AppConfig.START_LANG:
             raise RuntimeError(
                 f"Pipeline initialization error: Chain must start with '{AppConfig.START_LANG}' "
                 f"but step 1 requires '{self.chain[0].input_lang}'."
             )
 
+        # 2. Validate internal step transitions
+        for i in range(self.chain_length - 1):
+            current_output_lang = self.chain[i].output_lang
+            next_input_lang = self.chain[i+1].input_lang
+            
+            if current_output_lang != next_input_lang:
+                raise RuntimeError(
+                    f"Chain discontinuity detected at step {i+1} -> {i+2}: "
+                    f"Output language '{current_output_lang}' mismatches "
+                    f"next input language '{next_input_lang}'."
+                )
+
     def _validate_ouroboros_closure(self) -> None:
         """Ensures the chain forms a complete cycle: last output returns to first input."""
-        if self.chain[-1].output_lang != self.chain[0].input_lang:
+        start_lang = self.chain[0].input_lang
+        end_output_lang = self.chain[-1].output_lang
+        
+        if end_output_lang != start_lang:
              raise RuntimeError(
-                f"Ouroboros closure validation failed: Chain ends with '{self.chain[-1].output_lang}' "
-                f"but the starting language is '{self.chain[0].input_lang}'."
+                f"Ouroboros closure validation failed: Chain ends with '{end_output_lang}' "
+                f"but the starting language is '{start_lang}'."
             )
 
     def execute_generation(self, initial_code: str, max_cycles: int = AppConfig.MAX_CYCLES) -> ExecutionResult:
@@ -124,8 +127,7 @@ class TransformationPipeline:
         current_code = initial_code
         current_language = AppConfig.START_LANG
         history: List[HistoryEntry] = []
-        successful_closure = False
-        cycles_run = 0 # Tracks how many cycles were *started* or *completed*
+        cycles_run = 0 
 
         print(f"--- Transformation Engine Initialized ---")
         print(f"Pipeline length: {self.chain_length} steps/cycle. Max Cycles: {max_cycles}\n")
@@ -135,7 +137,7 @@ class TransformationPipeline:
             
             for step_index, step in enumerate(self.chain):
                 
-                # State Check (Defense in Depth)
+                # State Check: Ensure the current language matches the step's expected input
                 if step.input_lang != current_language:
                      raise SystemError(
                          f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang} at Cycle {cycle_num}/Step {step_index+1}."
@@ -160,12 +162,13 @@ class TransformationPipeline:
             # Post-cycle check: Check if the language matches the START language
             if current_language == AppConfig.START_LANG:
                  print(f"\nSUCCESS: Cycle {cycle_num} completed. Ouroboros closed by returning to {AppConfig.START_LANG}.")
-                 successful_closure = True
                  break
             else:
                  print(f"Cycle {cycle_num} completed. Current language is {current_language}. Continuing...")
         
-        # Final summary message
+        # Determine final closure status
+        successful_closure = (current_language == AppConfig.START_LANG)
+        
         if not successful_closure:
             print(f"\nWARNING: Max cycles ({max_cycles}) reached. Final language is {current_language}.")
 

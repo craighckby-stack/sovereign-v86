@@ -1,3 +1,5 @@
+No actual integration shown (but documentation suggests it)
+Could benefit from a Protocol or ABC if part of a framework
 """
 Polyglot Core Component (Optimized Python)
 

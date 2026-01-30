@@ -1,56 +1,41 @@
 """
-Polyglot Source Module (Refactored for Architectural Clarity)
+Polyglot Component Module (Optimized Python Implementation)
 
-This module adheres to Python syntax for execution while documenting the
-conceptual structure intended for C and Java implementations. The primary
-focus is maintaining clean, idiomatic Python.
+This module implements the core functionality intended for a polyglot system,
+using idiomatic and performance-conscious Python practices. Conceptual C/Java
+structures are retained purely as documentation within the docstring for context.
 """
 
 __author__ = "Senior Software Architect"
 __version__ = "1.2.0"
-_PYTHON_BASE_MESSAGE = "Hello"
+_BASE_MESSAGE = "Hello"  # Renamed for conciseness and clarity
 
-# --- Language Separation Documentation ---
-# In a true polyglot scenario, these blocks would reside in separate, compilable files.
-# Here, they serve as clear documentation markers.
-
-# C Source Target (Conceptual Output: "World")
-# ---
-# #include <stdio.h>
-# int main(void) {
-#     printf("World\n");
-#     return 0;
-# }
-# ---
-
-# Java Source Target (Conceptual Output: "!")
-# ---
-# public class PolyglotOutput {
-#     public static void main(String[] args) {
-#         System.out.println("!");
-#     }
-# }
-# ---
+# --- Conceptual Polyglot Targets (Documentation Only) ---
+# C Source Target: "World"
+# Java Source Target: "!"
+# ------------------------------------------------------
 
 
-def get_python_component_output() -> str:
+def get_base_message() -> str:
     """
-    Retrieves the message component designated for Python execution.
+    Retrieves the core message component designated for this language implementation.
 
     Returns:
-        str: The base output string.
+        str: The base output string constant.
     """
-    # Using a constant lookup is highly performant for static values.
-    return _PYTHON_BASE_MESSAGE
+    return _BASE_MESSAGE
 
-def execute_python_path():
+
+def main():
     """
-    Main execution entry point. Concatenates and prints the final Python output.
+    Application entry point. Orchestrates the assembly and display of the output.
     """
-    # Optimization: Directly use the retrieved component.
-    output = get_python_component_output()
-    print(output)
+    # The specific structure for other languages implies concatenation occurs elsewhere.
+    # Here, we only output the component specific to this Python execution path.
+    output_component = get_base_message()
+    print(output_component)
+
 
 if __name__ == '__main__':
-    # Standard Python entry point pattern
-    execute_python_path()
+    # Ensure main execution logic is cleanly separated.
+    main()

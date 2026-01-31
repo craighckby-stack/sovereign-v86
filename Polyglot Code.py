@@ -3,23 +3,22 @@ from typing import Final
 """
 Polyglot Core Component (Python Implementation)
 
-Implements the core language-specific string component required by a
+Provides the definitive language-specific string component required by a
 polyglot execution framework.
 """
 
-# --- Configuration ---
+# --- Constants ---
 
-# The core string component value provided by this Python module.
 CORE_STRING_VALUE: Final[str] = "Hello"
 
 
-# --- Public API ---
+# --- Public Interface ---
 
 def get_core_string() -> str:
     """
-    Retrieves the definitive language-specific string component.
+    Retrieves the definitive language-specific string component value.
 
-    Provides an abstraction layer over the core component value.
+    This function serves as the abstraction layer for accessing the core component.
 
     Returns:
         The core string component value.
@@ -31,7 +30,7 @@ def get_core_string() -> str:
 
 def main() -> None:
     """
-    Entry point for local testing and demonstration.
+    Entry point for module demonstration and local testing.
     """
     print(get_core_string())
 

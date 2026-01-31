@@ -1,6 +1,6 @@
 # Sovereign v86: Autonomous Code Refactoring Agent
 
-Sovereign v86 is an autonomous code refactoring agent. Developed through 106 iterations of recursive self-improvement, v86 was selected for its optimal performance profile. The agent utilizes free-tier APIs and is released under the MIT license.
+Sovereign v86 is an autonomous code refactoring agent, developed through 106 iterations of recursive self-improvement. Selected for its optimal performance profile, the agent utilizes free-tier APIs and is released under the MIT license.
 
 ---
 
@@ -16,7 +16,7 @@ To operate Sovereign v86, the following three inputs are required:
 
 ### Model Selection
 
-**Recommendation:** Utilize the `gemini-lite` model. This model provides optimal cost efficiency and performance. Other models may introduce unnecessary overhead for standard refactoring tasks.
+**Recommendation:** Utilize the `gemini-lite` model. This model offers optimal cost efficiency and performance; other models may introduce unnecessary overhead for standard refactoring tasks.
 
 ### Commit Strategy
 
@@ -24,10 +24,10 @@ To operate Sovereign v86, the following three inputs are required:
 
 Sovereign v86 commits changes directly to the target branch (e.g., `main`), **overwriting the original code structure without confirmation.**
 
-**ACTION REQUIRED:** Use with extreme caution. It is mandatory to run the agent against a dedicated feature branch or a repository fork to prevent irreversible data loss.
+**MANDATORY ACTION:** To prevent irreversible data loss, you must run the agent against a dedicated feature branch or a repository fork. Use with extreme caution.
 
-### Exclusion List
+### Exclusion Mechanism
 
-To exclude specific files from the refactoring process, append the `.txt` extension to their filenames. This is the agent's designated exclusion mechanism.
+To exclude a specific file from the refactoring process, append the `.txt` extension to its filename. This is the agent's designated exclusion mechanism.
 
-*Example:* A file named `.log` will be automatically ignored during processing.
+*Example:* To exclude `config.json`, rename it to `config.json.txt`.

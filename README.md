@@ -30,4 +30,4 @@ Sovereign v86 commits changes directly to the target branch (e.g., `main`), **ov
 
 To exclude specific files from the refactoring process, append the `.txt` extension to their filenames. This is the agent's designated exclusion mechanism.
 
-*Example:* A file named `config.txt` will be automatically ignored during processing.
+*Example:* A file named `.log` will be automatically ignored during processing.

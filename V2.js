@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, doc, setDoc, serverTimestamp
@@ -8,6 +8,8 @@ import {
 } from 'firebase/auth';
 
 // --- Configuration Constants ---
+
+/** Core application configuration and limits. */
 const CONFIG = Object.freeze({
   MAX_FILE_SIZE_BYTES: 500_000,
   CYCLE_INTERVAL_MS: 15_000,
@@ -18,17 +20,20 @@ const CONFIG = Object.freeze({
   APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign',
 });
 
+/** Available AI models for processing. */
 const AI_MODELS = Object.freeze([
   { id: 'gemini-2.5-flash-preview-09-2025', label: 'Flash 2.5 Preview (Default)', tier: 1 },
   { id: 'gemini-1.5-flash', label: 'Flash 1.5 Stable', tier: 2 }
 ]);
 
+/** Defined processing pipelines based on persona and instruction. */
 const PROCESSING_PIPELINES = Object.freeze({
   CODE: [{ id: 'refactor', label: 'Refactor', text: 'Act as a Principal Engineer. Refactor for performance, readability, and modern best practices.' }],
   CONFIG: [{ id: 'validate', label: 'Lint', text: 'Act as a DevOps Engineer. Validate syntax and ensure clean configuration.' }],
   MARKDOWN: [{ id: 'grammar', label: 'Clarity', text: 'Act as an Editor. Improve prose and formatting.' }]
 });
 
+/** File matching patterns for indexing and exclusion. */
 const FILE_PATTERNS = Object.freeze({
   EXTENSIONS: {
     CODE: /\.(js|jsx|ts|tsx|py|html|css|scss|sql|sh|java|go|rs|rb|php|cpp|c|h)$/i,
@@ -40,15 +45,17 @@ const FILE_PATTERNS = Object.freeze({
   ]
 });
 
+/** Keys in state that should be persisted to local storage. */
 const PERSISTENCE_KEYS = new Set(['selectedModel', 'targetRepo']);
 
 // --- Utility Functions ---
 
-/** Decodes a Base64 string into a UTF-8 string. */
+/** Decodes a Base64 string into a UTF-8 string, handling multi-byte characters. */
 const decodeBase64 = (str) => {
   try {
     const binaryString = atob(str);
-    const bytes = Uint8Array.from(binaryString, char => char.codePointAt(0));
+    // Convert binary string to Uint8Array for correct UTF-8 decoding
+    const bytes = Uint8Array.from(binaryString, c => c.codePointAt(0));
     return new TextDecoder('utf-8').decode(bytes);
   } catch (e) {
     throw new Error(`Base64 decode failed: ${e.message}`);
@@ -89,12 +96,12 @@ const getPipeline = (filePath) => {
 /** Checks if a file object from the GitHub tree is relevant for processing. */
 const isRelevantFile = (f) => {
   if (f.type !== 'blob' || f.size >= CONFIG.MAX_FILE_SIZE_BYTES) return false;
+  // Check exclusion list (e.g., node_modules, minified files)
   if (FILE_PATTERNS.SKIP.some(p => p.test(f.path))) return false;
-
+  // Check inclusion list (code, config, docs)
   const { CODE, CONFIG: ConfigExt, DOCS } = FILE_PATTERNS.EXTENSIONS;
   return CODE.test(f.path) || ConfigExt.test(f.path) || DOCS.test(f.path);
 };
-
 
 // --- State Management ---
 const INITIAL_STATE = {
@@ -131,7 +138,7 @@ function appReducer(state, action) {
       };
     case 'ADD_LOG':
       const newLog = { ...action.payload, id: Date.now() + Math.random() };
-      // Use slice for efficient history limit enforcement
+      // Efficient history limit enforcement
       return {
         ...state,
         logs: [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT)
@@ -176,7 +183,6 @@ const useFirebaseSetup = (addLog) => {
   useEffect(() => {
     const initFirebase = async () => {
       try {
-        // Check for required global configuration variables
         if (typeof __firebase_config === 'undefined') {
           throw new Error("Firebase configuration not found.");
         }
@@ -190,6 +196,7 @@ const useFirebaseSetup = (addLog) => {
 
         const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
+        // Prioritize custom token sign-in, fallback to anonymous
         if (initialToken) {
           await signInWithCustomToken(auth, initialToken);
         } else {
@@ -224,9 +231,15 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
     'Accept': 'application/vnd.github.v3+json'
   }), []);
 
+  // Utility to safely encode file path components for GitHub API URLs
+  const encodePath = useCallback((filePath) => 
+    filePath.split('/').map(encodeURIComponent).join('/')
+  , []);
+
+  // --- GitHub Handlers ---
+
   const fetchFileContent = useCallback(async (owner, repo, filePath, token) => {
-    // Encode path components robustly
-    const path = filePath.split('/').map(encodeURIComponent).join('/');
+    const path = encodePath(filePath);
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
     const headers = getGithubHeaders(token);
 
@@ -245,10 +258,10 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       content: decodeBase64(data.content),
       sha: data.sha
     };
-  }, [getGithubHeaders]);
+  }, [getGithubHeaders, encodePath]);
 
   const commitFileUpdate = useCallback(async (owner, repo, filePath, content, sha, token) => {
-    const path = filePath.split('/').map(encodeURIComponent).join('/');
+    const path = encodePath(filePath);
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
     const headers = getGithubHeaders(token);
 
@@ -266,7 +279,9 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       const errorData = await res.json().catch(() => ({ message: 'Unknown error' }));
       throw new Error(`GH Commit Error (${res.status}): ${errorData.message || res.statusText}`);
     }
-  }, [getGithubHeaders]);
+  }, [getGithubHeaders, encodePath]);
+
+  // --- Gemini Handler ---
 
   const callGeminiAPI = useCallback(async (prompt, personaText, modelId, apiKey) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
@@ -288,7 +303,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       try {
         if (!state.isLive) {
           clearTimeout(timeoutId);
-          // Throw error with specific cause for engine to ignore
+          // Use Error cause for engine to detect intentional halt
           throw new Error("Operation halted by user.", { cause: 'USER_HALT' });
         }
 
@@ -306,7 +321,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
         if (!res.ok) {
           const errorStatus = res.status;
-          // Check for rate limiting (429) or server errors (5xx)
+          // Retry on rate limiting (429) or server errors (5xx)
           if (errorStatus === 429 || (errorStatus >= 500 && errorStatus < 600)) {
             const e = new Error(`API Status ${errorStatus}`);
             e.isRetryable = true;
@@ -320,7 +335,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
         if (!text) throw new Error("Empty API Response or malformed structure.");
 
-        // Robust cleanup of potential markdown wrappers in a single pass
+        // Robust cleanup of potential markdown wrappers
         return text.replace(/^```[a-z]*\n|```$/gi, '').trim();
 
       } catch (e) {
@@ -338,7 +353,6 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
         throw e;
       }
     }
-    // Fallback if loop somehow exits without throwing
     throw new Error("Gemini API failed after all retries.");
   }, [state.isLive, addLog, abortControllerRef]);
 
@@ -366,7 +380,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 
       const processed = await callGeminiAPI(currentContent, step.text, modelId, apiKey);
 
-      // Check if content changed significantly (length > 5 prevents trivial whitespace changes)
+      // Check if content changed significantly (length > 5 heuristic)
       if (processed && processed !== currentContent && processed.length > 5) {
         currentContent = processed;
         mutated = true;
@@ -490,6 +504,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
   const handleMainButton = useCallback(() => {
     if (state.isLive) {
       dispatch({ type: 'TOGGLE_LIVE' });
+      // Abort any pending API calls immediately
       if (abortControllerRef.current) abortControllerRef.current.abort();
       addLog("Operation halted by user.", "warning");
     } else if (state.isIndexed) {

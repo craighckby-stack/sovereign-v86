@@ -8,7 +8,7 @@ An autonomous code refactoring agent featuring adaptive custom instruction suppo
 
 | Feature | Description |
 | :--- | :--- |
-| 🤖 **AI-Powered Refactoring** | Utilizes Gemini models for code analysis and quality improvement. |
+| 🤖 **AI-Powered Refactoring** | Utilizes Gemini models for deep code analysis and quality improvement. |
 | 📝 **Custom Instructions** | Supports user-defined refactoring directives via dedicated instruction files. |
 | 🔄 **Auto-Updating Roadmap** | Dynamically maintains the project TODO list based on executed changes. |
 | 🛡️ **Markdown Guardrails** | Implements strict validation to prevent markdown "spillover" into code artifacts. |
@@ -94,7 +94,7 @@ The agent executes operations following this strict internal queue order:
 
 1.  **🥇 Instruction Artifacts:** Read and process all instruction files. These files are **not** modified.
 2.  **🥈 Core Code & Configuration:** Main targets for refactoring (e.g., `.js`, `.py`, `.ts`, `.json`).
-3.  **🥉 Project Context:** `README.md` is read last to gather the maximum contextual understanding *after* instructions and code assessment. This file is **read-only**.
+3.  **🥉 Project Context:** `README.md` is read last to gather maximum contextual understanding *after* instructions and code assessment. This file is **read-only**.
 
 ---
 
@@ -105,7 +105,7 @@ Upon successful mutation of a code artifact, the agent initiates an AI-driven up
 ### Update Mechanism
 
 1.  Refactoring operation completes successfully for `<filename>`.
-2.  The agent prompts the AI to synthesize the next set of required actions, reflecting changes made.
+2.  The agent prompts the AI to synthesize the next set of required actions, reflecting the changes made.
 3.  The updated TODO markdown content is committed back to the repository.
 4.  Commit messages are standardized: `[Sovereign] Roadmap Update: <filename>`.
 

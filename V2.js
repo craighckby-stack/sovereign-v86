@@ -1,3 +1,25 @@
+const ARCHITECT_TODO_LIST = [
+  // --- Architectural Refactoring (P0) ---
+  "Split monolithic App.js file: Extract constants, utilities, reducers, and custom hooks into separate files (e.g., config.js, utils.js, state/reducer.js, hooks/useApiHandlers.js).",
+  "Centralize Configuration: Move all global constants (CONFIG, AI_MODELS, FILE_PATTERNS) to a dedicated 'config' module.",
+  "Improve State Management: Consider using React Context for global state (isLive, metrics, logs) instead of passing dispatch/state through multiple layers of hooks, especially for `addLog`.",
+
+  // --- Performance & React Best Practices (P1) ---
+  "Optimize `useProcessingEngine` dependencies: Review dependencies for `runCycle` and `processFile` to ensure they are minimal and correctly memoized, preventing unnecessary interval restarts.",
+  "Refine `getPipeline` logic: Currently defined as a utility, but relies on global constants. Ensure constants are imported correctly if moved to a separate file.",
+  "Externalize Inline Styles: Move the inline `<style>` tag used for hiding the scrollbar (`.log-area::-webkit-scrollbar`) into a global CSS file or use a dedicated styling solution.",
+
+  // --- Error Handling & Robustness (P2) ---
+  "Robust Firebase Config Check: Enhance the check for `__firebase_config` and `__initial_auth_token` to provide clearer user feedback if the build process failed to inject these variables.",
+  "Input Validation: Implement client-side validation for `targetRepo` format (owner/repo) and ensure tokens are non-empty before attempting API calls in `discover`.",
+  "API Response Cleanup: The `callGeminiAPI` uses `.replace(/^```[a-z]*\n|```$/gi, '').trim()` for robust cleanup. This should be tested against edge cases where the model might return complex wrappers or partial markdown.",
+
+  // --- Code Quality & Clarity (P3) ---
+  "Type Safety: Introduce TypeScript to define types for `state`, `action`, `CONFIG`, and API handler inputs/outputs, significantly improving maintainability.",
+  "Consistent Naming: Ensure consistent naming conventions (e.g., `ConfigExt` vs `CONFIG` in `getPipeline`).",
+  "Refactor `appReducer`: Break down the large switch statement into smaller, focused handler functions (e.g., `handleSetStatus`, `handleUpdateMetrics`)."
+];
+
 import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 
 // Firebase Core

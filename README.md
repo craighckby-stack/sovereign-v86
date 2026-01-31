@@ -1,8 +1,6 @@
 # Sovereign v86: Autonomous Code Refactoring Agent
 
-An autonomous code refactoring agent featuring adaptive custom instruction support and intelligent project management capabilities. The agent analyzes project context from `README.md`, applies refactoring rules defined in custom TODO/instruction files, and maintains an AI-driven operational roadmap.
-
----
+An autonomous code refactoring agent featuring adaptive custom instruction support and intelligent project management capabilities. The agent analyzes project context from `README.md`, applies refactoring rules defined in custom instruction files, and maintains an AI-driven operational roadmap.
 
 ## Core Capabilities
 
@@ -142,7 +140,7 @@ Files matching the following patterns are bypassed automatically to maintain int
 -   `dist/`, `build/` (Output/Build directories)
 -   `.git/` (Version control metadata)
 -   `*.log` (Log files)
--   **Protection Extension:** Files appended with `.txt` are considered immutable for this session (e.g., `.env` becomes `.env.txt`).
+-   **Protection Extension:** Files appended with `.txt` are considered immutable for the current session (e.g., `.env` becomes `.env.txt`).
 
 ---
 

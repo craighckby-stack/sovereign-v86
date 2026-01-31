@@ -1,3 +1,6 @@
+This file has been edited for improved clarity, consistency, and internal documentation, particularly around complex asynchronous logic and utility functions.
+
+```javascript
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
@@ -9,15 +12,17 @@ import {
 } from 'firebase/auth';
 
 /**
- * --- Sovereign v86 Multi-Model Production Kernel ---
- * Optimized for mobile/desktop hybrid environments.
- * Implements exponential backoff, Firestore batching, and model health tracking.
+ * Sovereign v86: Multi-Model Production Kernel
+ *
+ * This core application component manages the agent's lifecycle,
+ * authentication, configuration, and execution loop.
+ * Features include: exponential backoff, Firestore batching, and real-time model health tracking.
  */
 
 const CORE_CONFIG = {
   BATCH_SIZE: 5,
   BUFFER_MAX: 50,
-  CYCLE_INTERVAL: 45000,
+  CYCLE_INTERVAL: 45000, // 45 seconds
   MODELS: [
     { id: 'gemini-2.5-flash-lite-preview-09-2025', label: 'Lite', tier: 'Lite' },
     { id: 'gemini-2.5-flash-preview-09-2025', label: 'Flash 2.5', tier: 'Pro' },
@@ -26,7 +31,7 @@ const CORE_CONFIG = {
   APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign'
 };
 
-// Initialize Firebase
+// Initialize Firebase services
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -52,7 +57,8 @@ function reducer(state, action) {
       if (action.key === 'targetRepo') localStorage.setItem('emg_repo_v86', action.value);
       if (action.key === 'selectedModel') localStorage.setItem('emg_active_model_v86', action.value);
       return { ...state, [action.key]: action.value };
-    case 'ACKNOWLEDGE': return { ...state, isAcknowledged: true };
+    case 'ACKNOWLEDGE':
+      return { ...state, isAcknowledged: true };
     case 'TOGGLE':
       const newLive = !state.isLive;
       return { ...state, isLive: newLive, status: newLive ? 'INITIALIZING' : 'IDLE', activePath: 'Ready' };
@@ -70,13 +76,16 @@ function reducer(state, action) {
       const newHealth = { ...state.modelHealth, [action.modelId]: { isBlocked: action.blocked, resetAt: action.resetAt } };
       localStorage.setItem('emg_health_v86', JSON.stringify(newHealth));
       return { ...state, modelHealth: newHealth };
-    default: return state;
+    default:
+      return state;
   }
 }
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [user, setUser] = useState(null);
+
+  // Refs for sensitive inputs and operational state
   const ghTokenRef = useRef('');
   const geminiKeyRef = useRef('');
   const isBusy = useRef(false);
@@ -85,6 +94,11 @@ export default function App() {
   const mutationBuffer = useRef([]);
   const metricsRef = useRef(state.metrics);
 
+  /**
+   * Pushes a new message to the console log.
+   * @param {string} msg - The message content.
+   * @param {('info'|'error'|'success')} type - The log type.
+   */
   const pushLog = (msg, type = 'info') => dispatch({
     type: 'LOG',
     payload: {
@@ -94,10 +108,10 @@ export default function App() {
     }
   });
 
-  // Keep metrics ref in sync for closure safety in the loop
+  // Sync metrics ref for safe access within the asynchronous cycle loop
   useEffect(() => { metricsRef.current = state.metrics; }, [state.metrics]);
 
-  // Auth Implementation - Mandatory Rule 3
+  // Authentication Setup: Handles custom token or anonymous sign-in.
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -114,7 +128,7 @@ export default function App() {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Data Sync Implementation - Mandatory Rule 1 & 2
+  // Real-time Data Synchronization (Insights)
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, 'artifacts', CORE_CONFIG.APP_ID, 'users', user.uid, 'insights'), limit(15));
@@ -127,7 +141,9 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // Buffer Flush to Firestore
+  /**
+   * Flushes the current mutation buffer to Firestore using batch writes.
+   */
   const flushMutationBuffer = async () => {
     if (mutationBuffer.current.length === 0 || !user) return;
     try {
@@ -149,15 +165,18 @@ export default function App() {
     }
   };
 
+  /**
+   * Fetches a resource with exponential backoff and handles rate limiting (429).
+   */
   const fetchWithRetry = async (url, options = {}, retries = 5, backoff = 1000) => {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 45000);
+    const id = setTimeout(() => controller.abort(), 45000); // 45s timeout
     try {
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
 
       if (res.status === 429) {
-        const resetAt = Date.now() + 60000;
+        const resetAt = Date.now() + 60000; // Block model for 60 seconds
         dispatch({ type: 'SET_MODEL_BLOCK', modelId: state.selectedModel, blocked: true, resetAt });
         throw new Error("Rate Limited");
       }
@@ -172,17 +191,21 @@ export default function App() {
     }
   };
 
+  /**
+   * Core execution loop for scanning, analyzing, and committing refactoring changes.
+   */
   const runCycle = useCallback(async () => {
     if (!state.isLive || isBusy.current || !user) return;
 
-    // Safety check for model blocking
+    // Model Health Check: Switch models if the current one is blocked.
     if (state.modelHealth[state.selectedModel]?.isBlocked) {
       const nextAvailable = CORE_CONFIG.MODELS.find(m => !state.modelHealth[m.id]?.isBlocked);
       if (nextAvailable) {
+        pushLog(`Model ${state.selectedModel} blocked. Switching to ${nextAvailable.label}.`, "info");
         dispatch({ type: 'SET_VAL', key: 'selectedModel', value: nextAvailable.id });
         return;
       } else {
-        pushLog("Global cooldown active. Stopping.", "error");
+        pushLog("All models are under global cooldown. Stopping.", "error");
         dispatch({ type: 'TOGGLE' });
         return;
       }
@@ -201,7 +224,7 @@ export default function App() {
       if (!repo.includes('/') || !ghToken || !geminiKey) throw new Error("Credentials Missing");
       const headers = { 'Authorization': `token ${ghToken}`, 'Accept': 'application/vnd.github.v3+json' };
 
-      // Queue Building
+      // 1. Queue Building (Initial Scan)
       if (queueRef.current.length === 0) {
         dispatch({ type: 'SET_STATUS', value: 'SCAN' });
         const rRes = await fetchWithRetry(`https://api.github.com/repos/${repo}`, { headers });
@@ -215,21 +238,23 @@ export default function App() {
 
       currentPath = queueRef.current[indexRef.current];
       if (!currentPath) {
-        pushLog("Queue Exhausted", "success");
+        pushLog("Queue Exhausted. Cycle complete.", "success");
         dispatch({ type: 'TOGGLE' });
         return;
       }
 
+      // 2. Fetch Content
       dispatch({ type: 'SET_STATUS', value: 'ANALYZING', path: currentPath });
       const fRes = await fetchWithRetry(`https://api.github.com/repos/${repo}/contents/${currentPath}`, { headers });
       const fData = await fRes.json();
 
+      // Utility functions for handling GitHub's Base64 content encoding
       const b64ToUtf8 = (str) => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
       const utf8ToB64 = (str) => btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (m, p) => String.fromCharCode('0x' + p)));
 
       const raw = b64ToUtf8(fData.content);
 
-      // AI Logic
+      // 3. AI Logic (Refactoring Request)
       const aiRes = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${state.selectedModel}:generateContent?key=${geminiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -237,11 +262,13 @@ export default function App() {
       });
 
       const aiData = await aiRes.json();
+      // Strip markdown code fences (e.g., ```javascript ... ```)
       const optimized = aiData?.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
 
+      // 4. Commit Strategy
       if (!optimized || optimized === raw) {
         outcome = 'SKIP';
-        pushLog(`No change for ${currentPath.split('/').pop()}`);
+        pushLog(`No change detected for ${currentPath.split('/').pop()}`);
       } else {
         const putRes = await fetchWithRetry(`https://api.github.com/repos/${repo}/contents/${currentPath}`, {
           method: 'PUT',
@@ -270,16 +297,20 @@ export default function App() {
       pushLog(e.message, "error");
       outcome = 'ERROR';
     } finally {
+      // 5. Update Metrics and Cursor
       const total = queueRef.current.length || 1;
       const progress = Math.round(((indexRef.current + 1) / total) * 100);
 
-      dispatch({ type: 'UPDATE_METRICS', payload: {
-        progress: Math.min(progress, 100),
-        mutations: metricsRef.current.mutations + (outcome === 'MUTATE' ? 1 : 0),
-        skipped: metricsRef.current.skipped + (outcome === 'SKIP' ? 1 : 0),
-        errors: metricsRef.current.errors + (outcome === 'ERROR' ? 1 : 0),
-        latency: Math.round(performance.now() - startTime)
-      }});
+      dispatch({
+        type: 'UPDATE_METRICS',
+        payload: {
+          progress: Math.min(progress, 100),
+          mutations: metricsRef.current.mutations + (outcome === 'MUTATE' ? 1 : 0),
+          skipped: metricsRef.current.skipped + (outcome === 'SKIP' ? 1 : 0),
+          errors: metricsRef.current.errors + (outcome === 'ERROR' ? 1 : 0),
+          latency: Math.round(performance.now() - startTime)
+        }
+      });
 
       indexRef.current++;
       localStorage.setItem('emg_cursor_v86', indexRef.current.toString());
@@ -287,6 +318,7 @@ export default function App() {
     }
   }, [state.isLive, state.targetRepo, state.selectedModel, user, state.modelHealth]);
 
+  // Polling loop setup
   useEffect(() => {
     let t;
     if (state.isLive) {

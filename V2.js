@@ -48,11 +48,7 @@ const PERSISTENCE_KEYS = new Set(['selectedModel', 'targetRepo']);
 const decodeBase64 = (str) => {
   try {
     const binaryString = atob(str);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    const bytes = Uint8Array.from(binaryString, char => char.codePointAt(0));
     return new TextDecoder('utf-8').decode(bytes);
   } catch (e) {
     throw new Error(`Base64 decode failed: ${e.message}`);
@@ -135,6 +131,7 @@ function appReducer(state, action) {
       };
     case 'ADD_LOG':
       const newLog = { ...action.payload, id: Date.now() + Math.random() };
+      // Use slice for efficient history limit enforcement
       return {
         ...state,
         logs: [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT)
@@ -179,6 +176,7 @@ const useFirebaseSetup = (addLog) => {
   useEffect(() => {
     const initFirebase = async () => {
       try {
+        // Check for required global configuration variables
         if (typeof __firebase_config === 'undefined') {
           throw new Error("Firebase configuration not found.");
         }
@@ -282,7 +280,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       }
     };
 
-    for (let retryCount = 0; retryCount <= CONFIG.MAX_API_RETRIES; retryCount++) {
+    for (let attempt = 0; attempt <= CONFIG.MAX_API_RETRIES; attempt++) {
       const controller = new AbortController();
       abortControllerRef.current = controller;
       const timeoutId = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT_MS);
@@ -290,6 +288,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       try {
         if (!state.isLive) {
           clearTimeout(timeoutId);
+          // Throw error with specific cause for engine to ignore
           throw new Error("Operation halted by user.", { cause: 'USER_HALT' });
         }
 
@@ -321,17 +320,17 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
         if (!text) throw new Error("Empty API Response or malformed structure.");
 
-        // Robust cleanup of potential markdown wrappers
-        return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
+        // Robust cleanup of potential markdown wrappers in a single pass
+        return text.replace(/^```[a-z]*\n|```$/gi, '').trim();
 
       } catch (e) {
         clearTimeout(timeoutId);
 
         const isRetryable = e.name === 'AbortError' || e.isRetryable;
 
-        if (isRetryable && retryCount < CONFIG.MAX_API_RETRIES) {
-          const delay = 2 ** retryCount * 1000; // Exponential backoff
-          addLog(`API Fault (Retryable, attempt ${retryCount + 1}/${CONFIG.MAX_API_RETRIES + 1}), retrying in ${delay / 1000}s...`, 'warning');
+        if (isRetryable && attempt < CONFIG.MAX_API_RETRIES) {
+          const delay = 2 ** attempt * 1000; // Exponential backoff
+          addLog(`API Fault (Retryable, attempt ${attempt + 1}/${CONFIG.MAX_API_RETRIES + 1}), retrying in ${delay / 1000}s...`, 'warning');
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
@@ -339,6 +338,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
         throw e;
       }
     }
+    // Fallback if loop somehow exits without throwing
     throw new Error("Gemini API failed after all retries.");
   }, [state.isLive, addLog, abortControllerRef]);
 
@@ -366,7 +366,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 
       const processed = await callGeminiAPI(currentContent, step.text, modelId, apiKey);
 
-      // Check if content changed significantly (length > 5 prevents trivial whitespace changes from triggering commits)
+      // Check if content changed significantly (length > 5 prevents trivial whitespace changes)
       if (processed && processed !== currentContent && processed.length > 5) {
         currentContent = processed;
         mutated = true;
@@ -417,7 +417,9 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
         addLog(`VERIFIED: ${fileName}`, "info");
       }
     } catch (e) {
-      if (e.name !== 'AbortError' && e.cause !== 'USER_HALT') {
+      // Check for intentional halts (AbortError or custom USER_HALT cause)
+      const isHalt = e.name === 'AbortError' || e.cause === 'USER_HALT';
+      if (!isHalt) {
         const targetPath = target || 'Unknown Target';
         addLog(`FAULT: ${targetPath.split('/').pop()} - ${e.message}`, "error");
         dispatch({ type: 'UPDATE_METRICS', payload: { errors: 1 } });

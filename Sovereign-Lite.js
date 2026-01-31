@@ -2,14 +2,17 @@ import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } 
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
-// --- Global Configuration Access (Assuming injection via build process) ---
+// --- Configuration & Constants ---
+
+/**
+ * Retrieves global configuration likely injected during build.
+ * Ensures safe access to potentially undefined global variables.
+ */
 const getGlobalConfig = () => ({
   APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign',
   FIREBASE_CONFIG: typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null,
   INITIAL_AUTH_TOKEN: typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null,
 });
-
-// --- Constants and Configuration ---
 
 const CONFIG = Object.freeze({
   MAX_FILE_SIZE_BYTES: 1_000_000, 
@@ -43,28 +46,26 @@ const SKIP_PATTERNS = Object.freeze([
   /node_modules\//, /\.min\./, /-lock\./, /dist\//, /build\//, /\.git\//, /\.log$/
 ]);
 
-const TODO_FILE_NAMES = ['.sovereign-instructions.md', 'sovereign-todo.md', 'instructions.md'];
+const TODO_FILE_NAMES = Object.freeze(['.sovereign-instructions.md', 'sovereign-todo.md', 'instructions.md']);
 
 const PERSIST_KEYS = new Set(['selectedModel', 'targetRepo']);
 
 // --- Utility Functions ---
 
-const ENCODER = new TextEncoder();
-const DECODER = new TextDecoder();
-
 const base64Decode = (str) => {
   try {
     const binaryString = atob(str);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    return DECODER.decode(bytes);
+    return new TextDecoder().decode(bytes);
   } catch (e) {
+    console.error("Base64 Decode failure:", e);
     throw new Error(`Base64 Decode failure`);
   }
 };
 
 const base64Encode = (str) => {
   try {
-    const bytes = ENCODER.encode(str);
+    const bytes = new TextEncoder().encode(str);
     const binaryString = String.fromCodePoint(...bytes);
     return btoa(binaryString);
   } catch (e) {
@@ -98,6 +99,8 @@ const ACTION_TYPES = {
   MARK_COMPLETE: 'MARK_COMPLETE',
 };
 
+const initialMetrics = { mutations: 0, steps: 0, errors: 0, progress: 0 };
+
 const initialState = {
   isLive: false,
   isAcknowledged: false,
@@ -108,7 +111,7 @@ const initialState = {
   selectedModel: localStorage.getItem(CONFIG.LOCAL_STORAGE_PREFIX + 'selectedModel') || MODELS[0].id,
   targetRepo: localStorage.getItem(CONFIG.LOCAL_STORAGE_PREFIX + 'targetRepo') || '',
   logs: [],
-  metrics: { mutations: 0, steps: 0, errors: 0, progress: 0 }
+  metrics: initialMetrics
 };
 
 function reducer(state, action) {
@@ -123,10 +126,11 @@ function reducer(state, action) {
       return { ...state, isAcknowledged: true };
 
     case ACTION_TYPES.TOGGLE_LIVE:
+      const newLive = !state.isLive;
       return { 
         ...state, 
-        isLive: !state.isLive, 
-        status: !state.isLive ? 'INITIALIZING' : 'IDLE', 
+        isLive: newLive, 
+        status: newLive ? (state.isIndexed ? 'INITIALIZING' : 'READY') : 'IDLE', 
         isComplete: false 
       };
 
@@ -162,7 +166,7 @@ function reducer(state, action) {
         ...state, 
         isIndexed: false, 
         isComplete: false, 
-        metrics: initialState.metrics, 
+        metrics: initialMetrics, 
         status: 'IDLE', 
         activePath: 'Ready' 
       };
@@ -195,7 +199,6 @@ function useFirebaseAuth(dispatch, setUser) {
     const { FIREBASE_CONFIG, INITIAL_AUTH_TOKEN } = CONFIG;
 
     if (!FIREBASE_CONFIG) {
-        // If config is missing, mark ready immediately to allow UI interaction
         if (isMounted) setFirebaseReady(true);
         return;
     }
@@ -205,12 +208,10 @@ function useFirebaseAuth(dispatch, setUser) {
         const app = initializeApp(FIREBASE_CONFIG);
         const auth = getAuth(app);
 
-        if (INITIAL_AUTH_TOKEN) {
-          await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
-        } else {
-          await signInAnonymously(auth);
-        }
-
+        const userCredential = INITIAL_AUTH_TOKEN 
+          ? await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN)
+          : await signInAnonymously(auth);
+        
         onAuthStateChanged(auth, (u) => { 
           if (isMounted) { 
             setUser(u); 
@@ -220,7 +221,6 @@ function useFirebaseAuth(dispatch, setUser) {
       } catch (e) {
         if (isMounted) {
             console.error("Firebase Initialization Failed:", e);
-            // Even on failure, proceed to avoid blocking the main app
             setFirebaseReady(true);
         }
       }
@@ -237,15 +237,15 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [user, setUser] = useState(null);
   
-  // Refs for sensitive credentials and dynamic context
+  // Refs for holding dynamic state/credentials that don't trigger re-renders
   const ghTokenRef = useRef('');
   const geminiKeyRef = useRef('');
-  const projectContextRef = useRef(''); // Max 3000 chars from README
-  const customInstructionsRef = useRef(''); // Content of the TODO file
+  const projectContextRef = useRef(''); 
+  const customInstructionsRef = useRef(''); 
   const readmeDataRef = useRef({ path: '', sha: '', content: '' });
   const todoFileRef = useRef({ path: '', sha: '', content: '' });
   
-  // Refs for cycle control
+  // Refs for cycle control flow
   const isProcessingRef = useRef(false);
   const queueRef = useRef([]);
   const currentIndexRef = useRef(0);
@@ -262,9 +262,6 @@ export default function App() {
 
   // --- API Handlers ---
 
-  /**
-   * General fetch wrapper for the Gemini API with retry logic.
-   */
   const callGeminiAPI = useCallback(async (payload, modelId, apiKey, retryCount = 0) => {
     const url = `${CONFIG.GEMINI_API_BASE}/models/${modelId}:generateContent?key=${apiKey}`;
     
@@ -287,17 +284,15 @@ export default function App() {
       
       if (!text) throw new Error("Empty or Malformed Response");
       
-      // Clean up markdown wrappers
+      // Aggressively clean common markdown wrappers
       return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
 
     } catch (e) {
-      if (e.name === 'AbortError') {
-        throw e;
-      }
+      if (e.name === 'AbortError') throw e;
       
       if (retryCount < CONFIG.MAX_API_RETRIES && state.isLive) {
-        addLog(`API call failed. Retrying in ${retryCount + 1}s...`, 'warning');
         const delay = Math.pow(2, retryCount) * 1000;
+        addLog(`API call failed for ${modelId}. Retrying in ${delay/1000}s...`, 'warning');
         await new Promise(r => setTimeout(r, delay));
         return callGeminiAPI(payload, modelId, apiKey, retryCount + 1);
       }
@@ -306,9 +301,6 @@ export default function App() {
   }, [state.isLive, addLog]);
 
 
-  /**
-   * Constructs the prompt and calls the generative model.
-   */
   const generateContent = useCallback((prompt, personaText, modelId, apiKey, context, instructions) => {
     const payload = {
       contents: [{ 
@@ -334,7 +326,7 @@ export default function App() {
 
   const updateTodoAndPlan = useCallback(async (owner, repo, token, apiKey, modelId, fileProcessed, codeSummary) => {
     const todoFile = todoFileRef.current;
-    if (!todoFile.path) return;
+    if (!todoFile.path || !todoFile.sha) return;
     
     const prompt = `
       Act as a Project Manager. Update the Markdown TODO list based on the recent change.
@@ -350,7 +342,8 @@ export default function App() {
     try {
       const updatedMarkdown = await generateContent(prompt, "Project Management Mode", modelId, apiKey, "", "");
       
-      if (updatedMarkdown && updatedMarkdown.trim().length > 50) { // Basic sanity check
+      // Sanity check for meaningful output
+      if (updatedMarkdown && updatedMarkdown.trim().length > 50) { 
         const url = `${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${todoFile.path}`;
         
         const putRes = await fetch(url, {
@@ -372,7 +365,8 @@ export default function App() {
           todoFileRef.current.sha = resData.content.sha;
           addLog("Roadmap Updated Successfully", "success");
         } else {
-            addLog(`Failed to commit Roadmap update (HTTP ${putRes.status})`, "warning");
+            const errBody = await putRes.json().catch(() => ({}));
+            addLog(`Failed to commit Roadmap update (HTTP ${putRes.status}): ${errBody.message || 'Unknown error'}`, "warning");
         }
       }
     } catch (e) { 
@@ -381,7 +375,7 @@ export default function App() {
   }, [generateContent, addLog]);
 
   /**
-   * Fetches, processes, and commits a single file.
+   * Fetches, processes, and commits a single file through the AI pipeline.
    */
   const processFile = useCallback(async (filePath, owner, repo, token, apiKey, modelId) => {
     const fileName = filePath.toLowerCase().split('/').pop();
@@ -411,14 +405,13 @@ export default function App() {
     }
     
     if (fileName === 'readme.md') {
-      // Limit context size to prevent prompt overflow
       projectContextRef.current = content.slice(0, 3000); 
       readmeDataRef.current = { path: filePath, sha, content };
       addLog(`Loaded Project Context: ${fileName}`, "success");
       return { status: 'CONTEXT_LOADED' };
     }
 
-    // 3. Apply AI Pipeline
+    // 3. Apply AI Pipeline (Only process files that pass initial configuration/size checks)
     const pipeline = getPipeline(filePath);
     let currentContent = content;
     let mutated = false;
@@ -437,10 +430,10 @@ export default function App() {
         customInstructionsRef.current
       );
       
-      // CRITICAL GUARD: Check for "Markdown Spillover"
+      // Guard: Block outputs that look like LLM chatter or incomplete markdown blocks
       const isCode = FILE_EXTENSIONS.CODE.test(filePath);
       if (isCode && (processed.includes('##') || processed.includes('Act as a'))) {
-        addLog(`Blocked Invalid Output for ${fileName} (Spillover Detected)`, "error");
+        addLog(`Blocked Invalid Output for ${fileName} (Format Spillover Detected)`, "error");
         dispatch({ type: ACTION_TYPES.UPDATE_METRICS, e: 1 });
         continue; 
       }
@@ -490,7 +483,7 @@ export default function App() {
     const repoPath = parseRepoPath(state.targetRepo);
     
     if (!repoPath) {
-        addLog("Invalid repository path configured.", "error");
+        addLog("Invalid repository path configured. Stopping.", "error");
         dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
         return;
     }
@@ -519,7 +512,6 @@ export default function App() {
       } else if (result.status === 'SKIPPED') {
         addLog(`SCAN: ${target.split('/').pop()}`, "info");
       }
-      // If status is CONTEXT_LOADED, we still proceed but don't count it as a mutation/scan
       
     } catch (e) {
       if (e.name !== 'AbortError') {
@@ -574,7 +566,7 @@ export default function App() {
           'Accept': 'application/vnd.github.v3+json' 
       };
 
-      // 1. Get Default Branch
+      // 1. Get Default Branch (using simplified path to avoid extra object mapping if possible)
       const rRes = await fetch(`${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}`, { headers });
       if (!rRes.ok) throw new Error(`Repo access failed (${rRes.status})`);
       const rData = await rRes.json();
@@ -594,7 +586,7 @@ export default function App() {
             (FILE_EXTENSIONS.CODE.test(f.path) || FILE_EXTENSIONS.CONFIG.test(f.path) || FILE_EXTENSIONS.DOCS.test(f.path))
         ).map(f => f.path);
       
-      // Prioritize instruction files and READMEs
+      // Prioritize instruction files and context files
       files.sort((a, b) => {
         const aL = a.toLowerCase().split('/').pop();
         const bL = b.toLowerCase().split('/').pop();
@@ -618,7 +610,10 @@ export default function App() {
     } catch (e) { 
         addLog(`Indexing Failed: ${e.message}`, "error"); 
     } finally { 
-        dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE' }); 
+        // Only update status to IDLE if not complete or stopping
+        if (!state.isLive) {
+            dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE' }); 
+        }
     }
   };
 
@@ -632,18 +627,17 @@ export default function App() {
           <div className="text-6xl mb-6">🛰️</div>
           <h1 className="text-3xl font-black uppercase tracking-tighter mb-2 italic">Sovereign <span className="text-emerald-500">Lite</span></h1>
           <p className="text-[10px] text-zinc-600 uppercase tracking-[0.5em] mb-12 font-bold italic">Boundary Control v86.40</p>
-          <button onClick={() => dispatch({ type: ACTION_TYPES.ACKNOWLEDGE })} className="w-full py-5 bg-white text-black rounded-2xl font-black uppercase text-[11px] tracking-widest transition-all">Engage</button>
+          <button onClick={() => dispatch({ type: ACTION_TYPES.ACKNOWLEDGE })} className="w-full py-5 bg-white text-black rounded-2xl font-black uppercase text-[11px] tracking-widest transition-all hover:bg-zinc-200">Engage</button>
         </div>
       </div>
     );
   }
 
-  if (!firebaseReady) return <div className="min-h-screen bg-black flex items-center justify-center font-mono text-zinc-800 tracking-widest text-[10px]">SYNCING_CHANNELS...</div>;
+  if (!firebaseReady) return <div className="min-h-screen bg-black flex items-center justify-center font-mono text-zinc-800 tracking-widest text-[10px]">ESTABLISHING_SECURE_LINK...</div>;
 
   const toggleLiveHandler = () => {
     if (state.isLive) {
       dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
-      // Crucially, abort any in-flight API call
       abortControllerRef.current?.abort(); 
     } else if (state.isIndexed) {
       dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
@@ -652,14 +646,15 @@ export default function App() {
     }
   };
 
-  const statusColor = state.isLive ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500';
+  const statusColor = state.isLive ? 'bg-emerald-600 text-white' : state.isComplete ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-500';
+  const buttonDisabled = !state.targetRepo || !ghTokenRef.current || !geminiKeyRef.current;
 
   return (
     <div className="min-h-screen bg-[#020202] text-zinc-300 p-4 md:p-10 font-mono text-[13px]">
       <div className="max-w-7xl mx-auto space-y-8">
         <header className="p-10 rounded-[3rem] bg-zinc-900/50 border border-white/5 flex flex-col lg:flex-row items-center justify-between gap-8">
           <div className="flex items-center gap-8">
-            <div className={`w-16 h-16 rounded-3xl flex items-center justify-center text-3xl border transition-all ${state.isLive ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 animate-pulse' : 'bg-zinc-800/20 text-zinc-600 border-zinc-700/50'}`}>{state.isLive ? '🦾' : '🔘'}</div>
+            <div className={`w-16 h-16 rounded-3xl flex items-center justify-center text-3xl border transition-all ${state.isLive ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 animate-pulse' : 'bg-zinc-800/20 text-zinc-600 border-zinc-700/50'}`}>{state.isLive ? '🦾' : state.isComplete ? '✅' : '🔘'}</div>
             <div>
               <h1 className="text-2xl font-black text-white uppercase italic">Sovereign <span className="text-emerald-500 text-sm">v86.40</span></h1>
               <div className="flex items-center gap-4 mt-1">
@@ -669,8 +664,15 @@ export default function App() {
             </div>
           </div>
           <div className="flex gap-4">
-            <button onClick={toggleLiveHandler} className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${state.isLive ? 'bg-red-600 text-white' : state.isIndexed ? 'bg-emerald-600 text-white' : 'bg-white text-black hover:bg-zinc-200'}`}>
-                {state.isLive ? 'Stop' : state.isIndexed ? 'Run' : 'Sync'}
+            <button 
+                onClick={toggleLiveHandler} 
+                disabled={buttonDisabled && !state.isLive}
+                className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all 
+                ${state.isLive ? 'bg-red-600 text-white hover:bg-red-500' 
+                : state.isIndexed ? 'bg-emerald-600 text-white hover:bg-emerald-500' 
+                : 'bg-white text-black hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600'}`}
+            >
+                {state.isLive ? 'Halt' : state.isIndexed ? 'Activate' : 'Discover & Sync'}
             </button>
           </div>
         </header>
@@ -678,21 +680,23 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           <aside className="lg:col-span-4 space-y-8">
              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] space-y-6">
+              <h3 className="text-[11px] font-bold uppercase text-emerald-400 border-b border-white/10 pb-2">Credentials & Targets</h3>
+              
               <div className="space-y-2">
                 <label htmlFor="repo-path" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Vault (owner/repo)</label>
-                <input id="repo-path" type="text" value={state.targetRepo} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'targetRepo', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none font-bold" />
+                <input id="repo-path" type="text" value={state.targetRepo} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'targetRepo', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/10 rounded-xl p-4 text-white outline-none font-bold text-sm" placeholder="e.g., user/repo-name" />
               </div>
               <div className="space-y-2">
                 <label htmlFor="gh-token" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Auth Secret (GitHub Token)</label>
-                <input id="gh-token" type="password" onChange={e => ghTokenRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" />
+                <input id="gh-token" type="password" onChange={e => ghTokenRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/10 rounded-xl p-4 text-white outline-none text-sm" placeholder="Hidden" />
               </div>
               <div className="space-y-2">
                 <label htmlFor="gemini-key" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Gemini Key</label>
-                <input id="gemini-key" type="password" onChange={e => geminiKeyRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" />
+                <input id="gemini-key" type="password" onChange={e => geminiKeyRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/10 rounded-xl p-4 text-white outline-none text-sm" placeholder="Hidden" />
               </div>
               <div className="space-y-2">
                 <label htmlFor="model-select" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Model Tier</label>
-                <select id="model-select" value={state.selectedModel} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'selectedModel', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none font-bold appearance-none">
+                <select id="model-select" value={state.selectedModel} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'selectedModel', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/10 rounded-xl p-4 text-white outline-none font-bold appearance-none text-sm">
                   {MODELS.map(model => (
                     <option key={model.id} value={model.id}>{model.label}</option>
                   ))}
@@ -703,20 +707,20 @@ export default function App() {
           
           <main className="lg:col-span-8 space-y-8">
             <div className="grid grid-cols-3 gap-6 text-center">
-              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-3xl font-black text-emerald-500">{state.metrics.mutations}</div><div className="text-[9px] font-black uppercase text-zinc-600">Mutations</div></div>
-              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] relative overflow-hidden">
-                <div className="text-3xl font-black text-white">{state.metrics.progress}%</div>
-                <div className="text-[9px] font-black uppercase text-zinc-600">Cycle Progress ({currentIndexRef.current}/{queueRef.current.length})</div>
-                <div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all" style={{ width: `${state.metrics.progress}%` }} />
+              <div className="p-6 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-4xl font-black text-emerald-500">{state.metrics.mutations}</div><div className="text-[10px] font-black uppercase text-zinc-600 mt-1">Mutations</div></div>
+              <div className="p-6 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] relative overflow-hidden">
+                <div className="text-4xl font-black text-white">{state.metrics.progress}%</div>
+                <div className="text-[10px] font-black uppercase text-zinc-600 mt-1">Progress ({currentIndexRef.current}/{queueRef.current.length})</div>
+                <div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all duration-300" style={{ width: `${state.metrics.progress}%` }} />
               </div>
-              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-3xl font-black text-red-500">{state.metrics.errors}</div><div className="text-[9px] font-black uppercase text-zinc-600">Spillovers</div></div>
+              <div className="p-6 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-4xl font-black text-red-500">{state.metrics.errors}</div><div className="text-[10px] font-black uppercase text-zinc-600 mt-1">Spillovers</div></div>
             </div>
             
-            <div className="h-[400px] bg-black border border-white/5 rounded-[3rem] flex flex-col overflow-hidden">
-              <div className="p-6 border-b border-white/5 bg-zinc-900/10 text-[10px] font-black uppercase tracking-widest text-zinc-500">Neural Log</div>
-              <div className="flex-1 overflow-y-auto p-10 space-y-2 text-[12px] log-area scroll-smooth">
-                {state.logs.map(l => (
-                    <div key={l.id} className="flex gap-4">
+            <div className="h-[450px] bg-black border border-white/5 rounded-[3rem] flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-white/5 bg-zinc-900/10 text-[10px] font-black uppercase tracking-widest text-zinc-500">Neural Log</div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2 text-[12px] log-area">
+                {state.logs.map((l, index) => (
+                    <div key={l.id} className="flex gap-4 transition-opacity duration-500 opacity-100">
                         <span className="text-zinc-800 font-bold shrink-0">{l.timestamp}</span>
                         <span className={l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : 'text-zinc-500'}>{l.msg}</span>
                     </div>
@@ -726,7 +730,22 @@ export default function App() {
           </main>
         </div>
       </div>
-      <style>{`.log-area::-webkit-scrollbar { display: none; }`}</style>
+      {/* Inline style for scrollbar customization is cleaner than external CSS for self-contained components */}
+      <style jsx global>{`
+        .log-area::-webkit-scrollbar {
+            width: 6px;
+        }
+        .log-area::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+        .log-area::-webkit-scrollbar-thumb {
+            background: #3f3f46;
+            border-radius: 3px;
+        }
+        .log-area::-webkit-scrollbar-thumb:hover {
+            background: #52525b;
+        }
+      `}</style>
     </div>
   );
 }

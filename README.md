@@ -1,10 +1,10 @@
-# Sovereign v86
+Sovereign v86
 
-An autonomous code refactoring agent that improved itself through 106 iterations of recursive self-improvement (v86 selected for optimal performance). Built on free-tier APIs and MIT licensed.
+Sovereign v86 is an autonomous code refactoring agent. It achieved its current state through 106 iterations of recursive self-improvement, with v86 selected for optimal performance. It is built using free-tier APIs and is MIT licensed.
 
 ## Prerequisites
 
-1.  **GitHub Repository:** Specify the target GitHub repository URL.
+1.  **GitHub Repository:** Specify the URL of the target GitHub repository.
 2.  **GitHub Token:** A valid GitHub Personal Access Token (PAT) with necessary permissions for cloning and pushing.
 3.  **Gemini API Key:** An API key for the Gemini model.
 
@@ -28,4 +28,4 @@ The agent commits changes directly to the `main` branch, overwriting the origina
 
 ### Exclusion List
 
-To prevent modification of specific files, append the `.txt` extension to their filenames (e.g., `config.txt` will be ignored).
+To prevent the agent from modifying specific files, append the `.txt` extension to their filenames. For example, `config.txt` will be ignored during processing.

@@ -1,13 +1,15 @@
 from typing import List, Callable, Dict, Any, Final, TypedDict, NamedTuple
+from dataclasses import dataclass
 import sys
 
 # --- Configuration & Constants ---
 
-class AppConfig:
+@dataclass(frozen=True)
+class Config:
     """Centralized configuration for the Ouroboros system."""
     MAX_CYCLES: Final[int] = 5  # Maximum number of full pipeline cycles to attempt
     START_LANG: Final[str] = "Ruby"
-    END_LANG: Final[str] = "Ruby"
+    END_LANG: Final[str] = "Ruby" # Defines the required final language for closure
 
 # --- Type Definitions ---
 
@@ -41,8 +43,11 @@ def _extract_first_line(code: str) -> str:
     if not code:
         return "N/A"
     
-    lines = [line.strip() for line in code.splitlines() if line.strip()]
-    return lines[0] if lines else "N/A"
+    # Use a generator expression with next() for efficiency, stopping on the first match.
+    try:
+        return next(line.strip() for line in code.splitlines() if line.strip())
+    except StopIteration:
+        return "N/A"
 
 
 # --- Transformation Logic (Placeholders) ---
@@ -89,29 +94,29 @@ class TransformationPipeline:
         Ensures strict language contiguity: Output(N) must match Input(N+1) and 
         the chain starts correctly.
         """
+        start_lang = Config.START_LANG
         
         # 1. Validate chain start aligns with configuration
-        if self.chain[0].input_lang != AppConfig.START_LANG:
+        if self.chain[0].input_lang != start_lang:
             raise RuntimeError(
-                f"Pipeline initialization error: Chain must start with '{AppConfig.START_LANG}' "
+                f"Pipeline initialization error: Chain must start with '{start_lang}' "
                 f"but step 1 requires '{self.chain[0].input_lang}'."
             )
 
         # 2. Validate internal step transitions
-        for i in range(self.chain_length - 1):
-            current_output_lang = self.chain[i].output_lang
-            next_input_lang = self.chain[i+1].input_lang
+        for i, current_step in enumerate(self.chain[:-1]):
+            next_step = self.chain[i+1]
             
-            if current_output_lang != next_input_lang:
+            if current_step.output_lang != next_step.input_lang:
                 raise RuntimeError(
                     f"Chain discontinuity detected at step {i+1} -> {i+2}: "
-                    f"Output language '{current_output_lang}' mismatches "
-                    f"next input language '{next_input_lang}'."
+                    f"Output language '{current_step.output_lang}' mismatches "
+                    f"next input language '{next_step.input_lang}'."
                 )
 
     def _validate_ouroboros_closure(self) -> None:
         """Ensures the chain forms a complete cycle: last output returns to first input."""
-        start_lang = self.chain[0].input_lang
+        start_lang = Config.START_LANG
         end_output_lang = self.chain[-1].output_lang
         
         if end_output_lang != start_lang:
@@ -120,12 +125,12 @@ class TransformationPipeline:
                 f"but the starting language is '{start_lang}'."
             )
 
-    def execute_generation(self, initial_code: str, max_cycles: int = AppConfig.MAX_CYCLES) -> ExecutionResult:
+    def execute_generation(self, initial_code: str, max_cycles: int = Config.MAX_CYCLES) -> ExecutionResult:
         """
         Runs the initial code through the transformation pipeline for a specified number of cycles.
         """
         current_code = initial_code
-        current_language = AppConfig.START_LANG
+        current_language = Config.START_LANG
         history: List[HistoryEntry] = []
         cycles_run = 0 
 
@@ -136,15 +141,18 @@ class TransformationPipeline:
             cycles_run = cycle_num
             
             for step_index, step in enumerate(self.chain):
+                step_in_cycle = step_index + 1
                 
                 # State Check: Ensure the current language matches the step's expected input
                 if step.input_lang != current_language:
+                     # This indicates a severe internal logic failure, not a configuration error
                      raise SystemError(
-                         f"FATAL: Internal pipeline state corrupted. Expected {current_language}, found {step.input_lang} at Cycle {cycle_num}/Step {step_index+1}."
+                         f"FATAL: Internal pipeline state corrupted. Expected input language '{current_language}', "
+                         f"but step {step_in_cycle} requires '{step.input_lang}' (Cycle {cycle_num})."
                      )
 
                 # Execute transformation
-                print(f"[C{cycle_num}/S{step_index+1}] Translating {step.input_lang} -> {step.output_lang}")
+                print(f"[C{cycle_num}/{step_in_cycle}] Translating {step.input_lang} -> {step.output_lang}")
                 
                 current_code = step.generator(current_code)
                 
@@ -153,24 +161,24 @@ class TransformationPipeline:
                 
                 history.append(HistoryEntry(
                     cycle=cycle_num,
-                    step_in_cycle=step_index + 1,
+                    step_in_cycle=step_in_cycle,
                     input_lang=step.input_lang,
                     output_lang=current_language,
                     code_length=len(current_code)
                 ))
             
             # Post-cycle check: Check if the language matches the START language
-            if current_language == AppConfig.START_LANG:
-                 print(f"\nSUCCESS: Cycle {cycle_num} completed. Ouroboros closed by returning to {AppConfig.START_LANG}.")
+            if current_language == Config.START_LANG:
+                 print(f"\nSUCCESS: Cycle {cycle_num} completed. Ouroboros closed by returning to {Config.START_LANG}.")
                  break
             else:
                  print(f"Cycle {cycle_num} completed. Current language is {current_language}. Continuing...")
         
         # Determine final closure status
-        successful_closure = (current_language == AppConfig.START_LANG)
+        successful_closure = (current_language == Config.START_LANG)
         
         if not successful_closure:
-            print(f"\nWARNING: Max cycles ({max_cycles}) reached. Final language is {current_language}.")
+            print(f"\nWARNING: Max cycles ({max_cycles}) reached without closure. Final language is {current_language}.")
 
         # Return structured results
         return ExecutionResult(
@@ -188,9 +196,9 @@ if __name__ == "__main__":
     
     # Define the explicit chain required to form the Ouroboros (Ruby -> Python -> Java -> Ruby)
     pipeline_definition: List[TransformationStep] = [
-        TransformationStep(AppConfig.START_LANG, "Python", generate_python_from_ruby),
+        TransformationStep(Config.START_LANG, "Python", generate_python_from_ruby),
         TransformationStep("Python", "Java", generate_java_from_python),
-        TransformationStep("Java", AppConfig.END_LANG, closing_transformer),
+        TransformationStep("Java", Config.END_LANG, closing_transformer),
     ]
 
     initial_ruby_payload = """
@@ -209,7 +217,7 @@ end
 
         print("\n" + "="*50)
         print("--- FINAL EXECUTION SUMMARY ---")
-        print(f"Start Language/Goal: {AppConfig.START_LANG}")
+        print(f"Start Language/Goal: {Config.START_LANG}")
         print(f"Pipeline Steps: {engine.chain_length}")
         print(f"Start Code Snippet: {results['initial_code_snippet']}")
         print(f"Cycles Run: {results['cycles_run']}")

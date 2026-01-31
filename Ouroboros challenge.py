@@ -7,7 +7,7 @@ import sys
 @dataclass(frozen=True, slots=True)
 class Config:
     """Centralized configuration for the Ouroboros system."""
-    # Use ClassVar for static constants within the configuration object
+    # Using ClassVar for static constants within the configuration object provides a clean namespace.
     MAX_CYCLES: ClassVar[int] = 5  # Maximum number of full pipeline cycles to attempt
     START_LANG: ClassVar[str] = "Ruby"
     END_LANG: ClassVar[str] = "Ruby" # Defines the required final language for closure
@@ -60,17 +60,17 @@ def extract_first_line(code: str) -> str:
 
 def generate_python_from_ruby(code: str) -> str:
     """Generates Python code from Ruby source fragment."""
-    snippet = extract_first_line(code)
+    snippet: Final[str] = extract_first_line(code)
     return f"# Python generated from Ruby: '{snippet}'\n# ... rest of translation"
 
 def generate_java_from_python(code: str) -> str:
     """Generates Java code from Python source fragment."""
-    snippet = extract_first_line(code)
+    snippet: Final[str] = extract_first_line(code)
     return f"// Java public class generated from Python: '{snippet}'\n// ... rest of translation"
 
 def closing_transformer(code: str) -> str:
     """Regenerates the starting language (Ruby) from the previous step (e.g., Java)."""
-    snippet = extract_first_line(code)
+    snippet: Final[str] = extract_first_line(code)
     return f"# Ruby code successfully regenerated. Traceback: {snippet}\n# ... final output"
 
 
@@ -89,6 +89,7 @@ class TransformationPipeline:
         if not transformations:
             raise ValueError("The transformation sequence cannot be empty.")
         
+        # Use Final for attributes that should not change after initialization
         self.chain: Final[PipelineChain] = transformations
         self.chain_length: Final[int] = len(transformations)
         
@@ -100,7 +101,7 @@ class TransformationPipeline:
         Ensures strict language contiguity: Output(N) must match Input(N+1) and 
         the chain starts correctly.
         """
-        start_lang = Config.START_LANG
+        start_lang: Final[str] = Config.START_LANG
         
         # 1. Validate chain start aligns with configuration
         if self.chain[0].input_lang != start_lang:
@@ -115,15 +116,15 @@ class TransformationPipeline:
             
             if current_step.output_lang != next_step.input_lang:
                 raise RuntimeError(
-                    f"Chain discontinuity detected between step {step_num} and {step_num + 1}: "
+                    f"Chain discontinuity detected at transition {step_num} -> {step_num + 1}: "
                     f"Output language '{current_step.output_lang}' mismatches "
                     f"next input language '{next_step.input_lang}'."
                 )
 
     def _validate_ouroboros_closure(self) -> None:
         """Ensures the chain forms a complete cycle: last output returns to first input."""
-        start_lang = Config.START_LANG
-        end_output_lang = self.chain[-1].output_lang
+        start_lang: Final[str] = Config.START_LANG
+        end_output_lang: Final[str] = self.chain[-1].output_lang
         
         if end_output_lang != start_lang:
              raise RuntimeError(
@@ -135,10 +136,10 @@ class TransformationPipeline:
         """
         Runs the initial code through the transformation pipeline for a specified number of cycles.
         """
-        current_code = initial_code
-        current_language = Config.START_LANG
+        current_code: str = initial_code
+        current_language: str = Config.START_LANG
         history: History = []
-        cycles_run = 0 
+        cycles_run: int = 0 
 
         print(f"--- Transformation Engine Initialized ---")
         print(f"Pipeline length: {self.chain_length} steps/cycle. Max Cycles: {max_cycles}\n")
@@ -147,10 +148,11 @@ class TransformationPipeline:
             cycles_run = cycle_num
             
             for step_index, step in enumerate(self.chain):
-                step_in_cycle = step_index + 1
+                step_in_cycle: Final[int] = step_index + 1
                 
                 # Defensive State Check: Ensure the current language matches the step's expected input
                 if step.input_lang != current_language:
+                     # SystemError indicates a severe internal logic failure in the pipeline executor
                      raise SystemError(
                          f"FATAL: Internal pipeline state corrupted. Expected input language '{current_language}', "
                          f"but step {step_in_cycle} requires '{step.input_lang}' (Cycle {cycle_num})."
@@ -180,7 +182,7 @@ class TransformationPipeline:
                  print(f"Cycle {cycle_num} completed. Current language is {current_language}. Continuing...")
         
         # Determine final closure status
-        successful_closure = (current_language == Config.START_LANG)
+        successful_closure: Final[bool] = (current_language == Config.START_LANG)
         
         if not successful_closure:
             print(f"\nWARNING: Max cycles ({max_cycles}) reached without closure. Final language is {current_language}.")
@@ -200,13 +202,13 @@ class TransformationPipeline:
 if __name__ == "__main__":
     
     # Define the explicit chain required to form the Ouroboros (Ruby -> Python -> Java -> Ruby)
-    pipeline_definition: PipelineChain = [
+    pipeline_definition: Final[PipelineChain] = [
         TransformationStep(Config.START_LANG, "Python", generate_python_from_ruby),
         TransformationStep("Python", "Java", generate_java_from_python),
         TransformationStep("Java", Config.END_LANG, closing_transformer),
     ]
 
-    initial_ruby_payload = """
+    initial_ruby_payload: Final[str] = """
 # Ouroboros Initial Seed
 def initialize_ouroboros
   print "Sequence 0 initiated."
@@ -215,10 +217,10 @@ end
 
     try:
         # 1. Initialize the pipeline engine
-        engine = TransformationPipeline(pipeline_definition)
+        engine: Final[TransformationPipeline] = TransformationPipeline(pipeline_definition)
         
         # 2. Execute the chain, running exactly one cycle for demonstration.
-        results: ExecutionResult = engine.execute_generation(initial_ruby_payload, max_cycles=1)
+        results: Final[ExecutionResult] = engine.execute_generation(initial_ruby_payload, max_cycles=1)
 
         print("\n" + "="*50)
         print("--- FINAL EXECUTION SUMMARY ---")

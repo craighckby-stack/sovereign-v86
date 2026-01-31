@@ -1,21 +1,25 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import {
-  getFirestore, collection, writeBatch, query, onSnapshot,
-  serverTimestamp, limit, doc, setDoc
-} from 'firebase/firestore';
-import {
-  getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
-} from 'firebase/auth';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
-// --- Configuration Constants ---
+// --- Global Configuration Access (Assuming injection via build process) ---
+const getGlobalConfig = () => ({
+  APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign',
+  FIREBASE_CONFIG: typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null,
+  INITIAL_AUTH_TOKEN: typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null,
+});
+
+// --- Constants and Configuration ---
+
 const CONFIG = Object.freeze({
   MAX_FILE_SIZE_BYTES: 1_000_000, 
   CYCLE_INTERVAL_MS: 15_000,   
   MAX_API_RETRIES: 5,
   LOCAL_STORAGE_PREFIX: 'emg_v86_',
   LOG_HISTORY_LIMIT: 60,
-  APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign',
+  GITHUB_API_BASE: 'https://api.github.com',
+  GEMINI_API_BASE: 'https://generativelanguage.googleapis.com/v1beta',
+  ...getGlobalConfig()
 });
 
 const MODELS = Object.freeze([
@@ -44,20 +48,28 @@ const TODO_FILE_NAMES = ['.sovereign-instructions.md', 'sovereign-todo.md', 'ins
 const PERSIST_KEYS = new Set(['selectedModel', 'targetRepo']);
 
 // --- Utility Functions ---
-const decodeBase64 = (str) => {
+
+const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
+
+const base64Decode = (str) => {
   try {
     const binaryString = atob(str);
     const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch (e) { throw new Error(`Decode failure`); }
+    return DECODER.decode(bytes);
+  } catch (e) {
+    throw new Error(`Base64 Decode failure`);
+  }
 };
 
-const encodeBase64 = (str) => {
+const base64Encode = (str) => {
   try {
-    const bytes = new TextEncoder().encode(str);
+    const bytes = ENCODER.encode(str);
     const binaryString = String.fromCodePoint(...bytes);
     return btoa(binaryString);
-  } catch (e) { return ''; }
+  } catch (e) {
+    return '';
+  }
 };
 
 const parseRepoPath = (repoString) => {
@@ -73,7 +85,19 @@ const getPipeline = (filePath) => {
   return PIPELINES.CODE;
 };
 
-// --- State Management ---
+// --- State Management: Reducer & Initial State ---
+
+const ACTION_TYPES = {
+  SET_VALUE: 'SET_VALUE',
+  ACKNOWLEDGE: 'ACKNOWLEDGE',
+  TOGGLE_LIVE: 'TOGGLE_LIVE',
+  ADD_LOG: 'ADD_LOG',
+  SET_STATUS: 'SET_STATUS',
+  UPDATE_METRICS: 'UPDATE_METRICS',
+  RESET_SESSION: 'RESET_SESSION',
+  MARK_COMPLETE: 'MARK_COMPLETE',
+};
+
 const initialState = {
   isLive: false,
   isAcknowledged: false,
@@ -89,68 +113,203 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
-    case 'SET_VAL':
-      if (PERSIST_KEYS.has(action.key)) localStorage.setItem(CONFIG.LOCAL_STORAGE_PREFIX + action.key, action.value);
+    case ACTION_TYPES.SET_VALUE:
+      if (PERSIST_KEYS.has(action.key)) {
+        localStorage.setItem(CONFIG.LOCAL_STORAGE_PREFIX + action.key, action.value);
+      }
       return { ...state, [action.key]: action.value };
-    case 'ACKNOWLEDGE': return { ...state, isAcknowledged: true };
-    case 'TOGGLE_LIVE': return { ...state, isLive: !state.isLive, status: !state.isLive ? 'INITIALIZING' : 'IDLE', isComplete: false };
-    case 'ADD_LOG': return { ...state, logs: [{ ...action.payload, id: Date.now() + Math.random() }, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT) };
-    case 'SET_STATUS': return { ...state, status: action.value, activePath: action.path || state.activePath };
-    case 'UPDATE_METRICS': {
+
+    case ACTION_TYPES.ACKNOWLEDGE:
+      return { ...state, isAcknowledged: true };
+
+    case ACTION_TYPES.TOGGLE_LIVE:
+      return { 
+        ...state, 
+        isLive: !state.isLive, 
+        status: !state.isLive ? 'INITIALIZING' : 'IDLE', 
+        isComplete: false 
+      };
+
+    case ACTION_TYPES.ADD_LOG:
+      const newLog = { ...action.payload, id: Date.now() + Math.random() };
+      return { 
+        ...state, 
+        logs: [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT) 
+      };
+
+    case ACTION_TYPES.SET_STATUS:
+      return { ...state, status: action.value, activePath: action.path || state.activePath };
+
+    case ACTION_TYPES.UPDATE_METRICS: {
       const { m = 0, stepIncr = 0, e = 0, cursor, total } = action;
-      const progress = (total > 0) ? Math.min(100, Math.round((cursor / total) * 100)) : state.metrics.progress;
-      return { ...state, metrics: { mutations: state.metrics.mutations + m, steps: state.metrics.steps + stepIncr, errors: state.metrics.errors + e, progress: progress } };
+      const progress = (total > 0 && cursor !== undefined) 
+        ? Math.min(100, Math.round((cursor / total) * 100)) 
+        : state.metrics.progress;
+      
+      return { 
+        ...state, 
+        metrics: { 
+          mutations: state.metrics.mutations + m, 
+          steps: state.metrics.steps + stepIncr, 
+          errors: state.metrics.errors + e, 
+          progress 
+        } 
+      };
     }
-    case 'RESET_SESSION': return { ...state, isIndexed: false, isComplete: false, metrics: initialState.metrics, status: 'IDLE', activePath: 'Ready' };
-    case 'MARK_COMPLETE': return { ...state, isComplete: true, isIndexed: false, isLive: false, status: 'FINISHED', activePath: 'Queue Complete' };
-    default: return state;
+
+    case ACTION_TYPES.RESET_SESSION:
+      return { 
+        ...state, 
+        isIndexed: false, 
+        isComplete: false, 
+        metrics: initialState.metrics, 
+        status: 'IDLE', 
+        activePath: 'Ready' 
+      };
+
+    case ACTION_TYPES.MARK_COMPLETE:
+      return { 
+        ...state, 
+        isComplete: true, 
+        isIndexed: false, 
+        isLive: false, 
+        status: 'FINISHED', 
+        activePath: 'Queue Complete' 
+      };
+      
+    default:
+      return state;
   }
 }
+
+// --- Custom Hooks and Core Logic ---
+
+/**
+ * Hook for managing Firebase initialization and authentication.
+ */
+function useFirebaseAuth(dispatch, setUser) {
+  const [firebaseReady, setFirebaseReady] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const { FIREBASE_CONFIG, INITIAL_AUTH_TOKEN } = CONFIG;
+
+    if (!FIREBASE_CONFIG) {
+        // If config is missing, mark ready immediately to allow UI interaction
+        if (isMounted) setFirebaseReady(true);
+        return;
+    }
+
+    const initFirebase = async () => {
+      try {
+        const app = initializeApp(FIREBASE_CONFIG);
+        const auth = getAuth(app);
+
+        if (INITIAL_AUTH_TOKEN) {
+          await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
+        } else {
+          await signInAnonymously(auth);
+        }
+
+        onAuthStateChanged(auth, (u) => { 
+          if (isMounted) { 
+            setUser(u); 
+            setFirebaseReady(true); 
+          }
+        });
+      } catch (e) {
+        if (isMounted) {
+            console.error("Firebase Initialization Failed:", e);
+            // Even on failure, proceed to avoid blocking the main app
+            setFirebaseReady(true);
+        }
+      }
+    };
+    initFirebase();
+    return () => { isMounted = false; };
+  }, [dispatch, setUser]);
+
+  return firebaseReady;
+}
+
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [user, setUser] = useState(null);
-  const [firebaseReady, setFirebaseReady] = useState(false);
-
+  
+  // Refs for sensitive credentials and dynamic context
   const ghTokenRef = useRef('');
   const geminiKeyRef = useRef('');
-  const projectContextRef = useRef('');
+  const projectContextRef = useRef(''); // Max 3000 chars from README
+  const customInstructionsRef = useRef(''); // Content of the TODO file
   const readmeDataRef = useRef({ path: '', sha: '', content: '' });
-  const customInstructionsRef = useRef('');
   const todoFileRef = useRef({ path: '', sha: '', content: '' });
+  
+  // Refs for cycle control
   const isProcessingRef = useRef(false);
   const queueRef = useRef([]);
   const currentIndexRef = useRef(0);
   const abortControllerRef = useRef(null);
 
+  const firebaseReady = useFirebaseAuth(dispatch, setUser);
+
   const addLog = useCallback((msg, type = 'info') => {
-    dispatch({ type: 'ADD_LOG', payload: { msg, type, timestamp: new Date().toLocaleTimeString([], { hour12: false }) } });
+    dispatch({ 
+      type: ACTION_TYPES.ADD_LOG, 
+      payload: { msg, type, timestamp: new Date().toLocaleTimeString([], { hour12: false }) } 
+    });
   }, []);
 
-  // Firebase Initialization
-  useEffect(() => {
-    let isMounted = true;
-    const initFirebase = async () => {
-      const forceReady = setTimeout(() => { if (isMounted) setFirebaseReady(true); }, 4000);
-      try {
-        if (typeof __firebase_config === 'undefined') throw new Error();
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-        onAuthStateChanged(auth, (u) => { if (isMounted) { setUser(u); setFirebaseReady(true); clearTimeout(forceReady); }});
-      } catch (e) { if (isMounted) { setFirebaseReady(true); clearTimeout(forceReady); }}
-    };
-    initFirebase();
-    return () => { isMounted = false; };
-  }, []);
+  // --- API Handlers ---
 
-  const callGeminiAPI = useCallback(async (prompt, personaText, modelId, apiKey, context = '', instructions = '', retryCount = 0) => {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+  /**
+   * General fetch wrapper for the Gemini API with retry logic.
+   */
+  const callGeminiAPI = useCallback(async (payload, modelId, apiKey, retryCount = 0) => {
+    const url = `${CONFIG.GEMINI_API_BASE}/models/${modelId}:generateContent?key=${apiKey}`;
+    
+    abortControllerRef.current = new AbortController();
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: abortControllerRef.current.signal
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}));
+        throw new Error(`API Error: ${res.status} ${errorBody?.error?.message || ''}`);
+      }
+
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (!text) throw new Error("Empty or Malformed Response");
+      
+      // Clean up markdown wrappers
+      return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
+
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        throw e;
+      }
+      
+      if (retryCount < CONFIG.MAX_API_RETRIES && state.isLive) {
+        addLog(`API call failed. Retrying in ${retryCount + 1}s...`, 'warning');
+        const delay = Math.pow(2, retryCount) * 1000;
+        await new Promise(r => setTimeout(r, delay));
+        return callGeminiAPI(payload, modelId, apiKey, retryCount + 1);
+      }
+      throw e;
+    }
+  }, [state.isLive, addLog]);
+
+
+  /**
+   * Constructs the prompt and calls the generative model.
+   */
+  const generateContent = useCallback((prompt, personaText, modelId, apiKey, context, instructions) => {
     const payload = {
       contents: [{ 
         parts: [{ 
@@ -164,204 +323,307 @@ export default function App() {
           ` 
         }] 
       }],
-      generationConfig: { temperature: 0.1, responseMimeType: "text/plain" }
-    };
-
-    abortControllerRef.current = new AbortController();
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: abortControllerRef.current.signal
-      });
-      if (!res.ok) throw new Error(`API: ${res.status}`);
-      const data = await res.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("Empty Response");
-      return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
-    } catch (e) {
-      if (e.name !== 'AbortError' && retryCount < CONFIG.MAX_API_RETRIES && state.isLive) {
-        const delay = Math.pow(2, retryCount) * 1000;
-        await new Promise(r => setTimeout(r, delay));
-        return callGeminiAPI(prompt, personaText, modelId, apiKey, context, instructions, retryCount + 1);
+      generationConfig: { 
+        temperature: 0.1, 
+        responseMimeType: "text/plain" 
       }
-      throw e;
-    }
-  }, [state.isLive]);
+    };
+    return callGeminiAPI(payload, modelId, apiKey);
+  }, [callGeminiAPI]);
 
-  const updateTodoAndPlan = async (owner, repo, token, apiKey, modelId, fileProcessed, codeSummary) => {
-    if (!todoFileRef.current.path) return;
+
+  const updateTodoAndPlan = useCallback(async (owner, repo, token, apiKey, modelId, fileProcessed, codeSummary) => {
+    const todoFile = todoFileRef.current;
+    if (!todoFile.path) return;
     
-    // Mode: Update Roadmap
     const prompt = `
-      Act as a Project Manager. Update the Markdown TODO list.
+      Act as a Project Manager. Update the Markdown TODO list based on the recent change.
       File just changed: "${fileProcessed}"
       Change Summary: ${codeSummary}
       
       Current List:
-      ${todoFileRef.current.content || "Empty"}
+      ${todoFile.content || "Empty"}
       
       Output the updated Markdown list ONLY.
     `;
 
     try {
-      const updatedMarkdown = await callGeminiAPI(prompt, "Project Management Mode", modelId, apiKey);
-      if (updatedMarkdown && updatedMarkdown.includes('#')) {
-        const url = `https://api.github.com/repos/${owner}/${repo}/contents/${todoFileRef.current.path}`;
+      const updatedMarkdown = await generateContent(prompt, "Project Management Mode", modelId, apiKey, "", "");
+      
+      if (updatedMarkdown && updatedMarkdown.trim().length > 50) { // Basic sanity check
+        const url = `${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${todoFile.path}`;
+        
         const putRes = await fetch(url, {
           method: 'PUT',
-          headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json' },
+          headers: { 
+            'Authorization': `token ${token}`, 
+            'Content-Type': 'application/json' 
+          },
           body: JSON.stringify({
             message: `[Sovereign] Roadmap Update: ${fileProcessed}`,
-            content: encodeBase64(updatedMarkdown),
-            sha: todoFileRef.current.sha
+            content: base64Encode(updatedMarkdown),
+            sha: todoFile.sha
           })
         });
+
         if (putRes.ok) {
           const resData = await putRes.json();
           todoFileRef.current.content = updatedMarkdown;
           todoFileRef.current.sha = resData.content.sha;
           addLog("Roadmap Updated Successfully", "success");
+        } else {
+            addLog(`Failed to commit Roadmap update (HTTP ${putRes.status})`, "warning");
         }
       }
-    } catch (e) { addLog("Roadmap sync failed", "warning"); }
-  };
+    } catch (e) { 
+      addLog(`Roadmap synchronization failed: ${e.message}`, "warning"); 
+    }
+  }, [generateContent, addLog]);
 
-  const processFile = async (filePath, owner, repo, token, apiKey, modelId) => {
+  /**
+   * Fetches, processes, and commits a single file.
+   */
+  const processFile = useCallback(async (filePath, owner, repo, token, apiKey, modelId) => {
     const fileName = filePath.toLowerCase().split('/').pop();
     const isTodo = TODO_FILE_NAMES.includes(fileName);
-    const path = filePath.split('/').map(encodeURIComponent).join('/');
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-    const headers = { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' };
+    const pathEncoded = filePath.split('/').map(encodeURIComponent).join('/');
+    const url = `${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${pathEncoded}`;
+    const headers = { 
+        'Authorization': `token ${token}`, 
+        'Accept': 'application/vnd.github.v3+json' 
+    };
 
+    // 1. Fetch File Content
     const res = await fetch(url, { headers });
+    if (!res.ok) {
+        throw new Error(`GitHub Fetch Failure (${res.status})`);
+    }
     const data = await res.json();
-    let content = decodeBase64(data.content);
+    let content = base64Decode(data.content);
     const sha = data.sha;
-
+    
+    // 2. Handle Special Files (Context/Instructions)
     if (isTodo) {
       customInstructionsRef.current = content;
       todoFileRef.current = { path: filePath, sha, content };
       addLog(`Mastered Tasks: ${fileName}`, "success");
-      return { status: 'SKIPPED' };
+      return { status: 'CONTEXT_LOADED' };
     }
     
     if (fileName === 'readme.md') {
-      projectContextRef.current = content.slice(0, 3000);
+      // Limit context size to prevent prompt overflow
+      projectContextRef.current = content.slice(0, 3000); 
       readmeDataRef.current = { path: filePath, sha, content };
-      return { status: 'SKIPPED' };
+      addLog(`Loaded Project Context: ${fileName}`, "success");
+      return { status: 'CONTEXT_LOADED' };
     }
 
+    // 3. Apply AI Pipeline
     const pipeline = getPipeline(filePath);
     let currentContent = content;
     let mutated = false;
-
+    
     for (const step of pipeline) {
       if (!state.isLive) break;
-      dispatch({ type: 'SET_STATUS', value: 'EVOLVING', path: filePath });
-      const processed = await callGeminiAPI(currentContent, step.text, modelId, apiKey, projectContextRef.current, customInstructionsRef.current);
+
+      dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'EVOLVING', path: filePath });
       
-      // CRITICAL GUARD: Check for "Markdown Spillover" in Code files
+      const processed = await generateContent(
+        currentContent, 
+        step.text, 
+        modelId, 
+        apiKey, 
+        projectContextRef.current, 
+        customInstructionsRef.current
+      );
+      
+      // CRITICAL GUARD: Check for "Markdown Spillover"
       const isCode = FILE_EXTENSIONS.CODE.test(filePath);
       if (isCode && (processed.includes('##') || processed.includes('Act as a'))) {
         addLog(`Blocked Invalid Output for ${fileName} (Spillover Detected)`, "error");
+        dispatch({ type: ACTION_TYPES.UPDATE_METRICS, e: 1 });
         continue; 
       }
 
+      // Check for effective change and size limit
       if (processed && processed !== currentContent && processed.length < CONFIG.MAX_FILE_SIZE_BYTES) {
         currentContent = processed;
         mutated = true;
       }
-      dispatch({ type: 'UPDATE_METRICS', stepIncr: 1 });
+      
+      dispatch({ type: ACTION_TYPES.UPDATE_METRICS, stepIncr: 1 });
     }
 
+    // 4. Commit Changes to GitHub
     if (mutated && state.isLive) {
       const putRes = await fetch(url, {
         method: 'PUT',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: `[Sovereign] Logic Evolution: ${filePath}`, content: encodeBase64(currentContent), sha })
+        body: JSON.stringify({ 
+          message: `[Sovereign] Logic Evolution: ${filePath}`, 
+          content: base64Encode(currentContent), 
+          sha 
+        })
       });
+      
       if (putRes.ok) {
-        // Only trigger the roadmap update AFTER the file is successfully committed
+        // 5. Update Roadmap asynchronously after successful commit
         await updateTodoAndPlan(owner, repo, token, apiKey, modelId, filePath, "Applied architectural refactoring.");
         return { status: 'MUTATED' };
+      } else {
+        const errorData = await putRes.json().catch(() => ({ message: 'Unknown commit failure' }));
+        throw new Error(`GitHub Commit Failure (${putRes.status}): ${errorData.message}`);
       }
     }
+    
     return { status: 'SKIPPED' };
-  };
+  }, [state.isLive, addLog, generateContent, updateTodoAndPlan]);
 
+
+  /**
+   * Executes the processing logic for a single file in the queue cycle.
+   */
   const runCycle = useCallback(async () => {
     if (!state.isLive || isProcessingRef.current || !state.isIndexed) return;
-    isProcessingRef.current = true;
+    
     const target = queueRef.current[currentIndexRef.current];
     const repoPath = parseRepoPath(state.targetRepo);
-    const [owner, repo] = repoPath;
     
-    if (!target) {
-      dispatch({ type: 'MARK_COMPLETE' });
-      isProcessingRef.current = false;
-      return;
+    if (!repoPath) {
+        addLog("Invalid repository path configured.", "error");
+        dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
+        return;
     }
 
+    if (!target) {
+      dispatch({ type: ACTION_TYPES.MARK_COMPLETE });
+      return;
+    }
+    
+    isProcessingRef.current = true;
+    const [owner, repo] = repoPath;
+
     try {
-      const result = await processFile(target, owner, repo, ghTokenRef.current, geminiKeyRef.current, state.selectedModel);
+      const result = await processFile(
+        target, 
+        owner, 
+        repo, 
+        ghTokenRef.current, 
+        geminiKeyRef.current, 
+        state.selectedModel
+      );
+      
       if (result.status === 'MUTATED') {
         addLog(`MUTATED: ${target.split('/').pop()}`, "success");
-        dispatch({ type: 'UPDATE_METRICS', m: 1 });
-      } else {
+        dispatch({ type: ACTION_TYPES.UPDATE_METRICS, m: 1 });
+      } else if (result.status === 'SKIPPED') {
         addLog(`SCAN: ${target.split('/').pop()}`, "info");
       }
+      // If status is CONTEXT_LOADED, we still proceed but don't count it as a mutation/scan
+      
     } catch (e) {
       if (e.name !== 'AbortError') {
-        addLog(`FAULT: ${target.split('/').pop()}`, "error");
-        dispatch({ type: 'UPDATE_METRICS', e: 1 });
+        addLog(`FAULT [${target.split('/').pop()}]: ${e.message}`, "error");
+        dispatch({ type: ACTION_TYPES.UPDATE_METRICS, e: 1 });
+      } else {
+        addLog("Cycle Aborted by User", "warning");
       }
     } finally {
       currentIndexRef.current++;
-      dispatch({ type: 'UPDATE_METRICS', cursor: currentIndexRef.current, total: queueRef.current.length });
+      dispatch({ 
+        type: ACTION_TYPES.UPDATE_METRICS, 
+        cursor: currentIndexRef.current, 
+        total: queueRef.current.length 
+      });
       isProcessingRef.current = false;
-      dispatch({ type: 'SET_STATUS', value: 'IDLE', path: 'Neural Standby' });
+      dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE', path: 'Neural Standby' });
     }
-  }, [state.isLive, state.targetRepo, state.selectedModel, state.isIndexed, addLog]);
+  }, [state.isLive, state.targetRepo, state.selectedModel, state.isIndexed, addLog, processFile]);
 
+
+  // --- Effects ---
+
+  // Polling/Cycle Effect
   useEffect(() => {
-    if (!state.isLive) return;
+    if (!state.isLive || !state.isIndexed) return;
+    
     const timer = setInterval(runCycle, CONFIG.CYCLE_INTERVAL_MS);
-    runCycle();
+    runCycle(); // Run immediately on activation
+    
     return () => clearInterval(timer);
-  }, [state.isLive, runCycle]);
+  }, [state.isLive, state.isIndexed, runCycle]);
 
+
+  /**
+   * Fetches the repo tree, filters files, and initializes the queue.
+   */
   const discover = async () => {
     const repoPath = parseRepoPath(state.targetRepo);
-    if (!repoPath || !ghTokenRef.current || !geminiKeyRef.current) return;
-    dispatch({ type: 'SET_STATUS', value: 'INDEXING' });
+    if (!repoPath || !ghTokenRef.current || !geminiKeyRef.current) {
+        addLog("Configuration missing (Repo Path, GitHub Token, or Gemini Key).", "error");
+        return;
+    }
+    
+    dispatch({ type: ACTION_TYPES.RESET_SESSION });
+    dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'INDEXING' });
+
     try {
       const [owner, repo] = repoPath;
-      const headers = { 'Authorization': `token ${ghTokenRef.current}`, 'Accept': 'application/vnd.github.v3+json' };
-      const rRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+      const headers = { 
+          'Authorization': `token ${ghTokenRef.current}`, 
+          'Accept': 'application/vnd.github.v3+json' 
+      };
+
+      // 1. Get Default Branch
+      const rRes = await fetch(`${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}`, { headers });
+      if (!rRes.ok) throw new Error(`Repo access failed (${rRes.status})`);
       const rData = await rRes.json();
-      const tRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${rData.default_branch || 'main'}?recursive=1`, { headers });
+      const defaultBranch = rData.default_branch || 'main';
+
+      // 2. Get Recursive Tree
+      const tRes = await fetch(`${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
+      if (!tRes.ok) throw new Error(`Tree fetch failed (${tRes.status})`);
       const tData = await tRes.json();
       
-      let files = (tData?.tree || []).filter(f => f.type === 'blob' && f.size < CONFIG.MAX_FILE_SIZE_BYTES && !SKIP_PATTERNS.some(p => p.test(f.path)) && (FILE_EXTENSIONS.CODE.test(f.path) || FILE_EXTENSIONS.CONFIG.test(f.path) || FILE_EXTENSIONS.DOCS.test(f.path))).map(f => f.path);
+      // 3. Filter and Sort Files
+      let files = (tData?.tree || [])
+        .filter(f => 
+            f.type === 'blob' && 
+            f.size < CONFIG.MAX_FILE_SIZE_BYTES && 
+            !SKIP_PATTERNS.some(p => p.test(f.path)) && 
+            (FILE_EXTENSIONS.CODE.test(f.path) || FILE_EXTENSIONS.CONFIG.test(f.path) || FILE_EXTENSIONS.DOCS.test(f.path))
+        ).map(f => f.path);
       
+      // Prioritize instruction files and READMEs
       files.sort((a, b) => {
         const aL = a.toLowerCase().split('/').pop();
         const bL = b.toLowerCase().split('/').pop();
-        if (TODO_FILE_NAMES.includes(aL)) return -1;
-        if (TODO_FILE_NAMES.includes(bL)) return 1;
-        if (aL === 'readme.md') return -1;
+        
+        const aIsTodo = TODO_FILE_NAMES.includes(aL);
+        const bIsTodo = TODO_FILE_NAMES.includes(bL);
+
+        if (aIsTodo && !bIsTodo) return -1;
+        if (bIsTodo && !aIsTodo) return 1;
+        
+        if (aL === 'readme.md' && bL !== 'readme.md') return -1;
+        if (bL === 'readme.md' && aL !== 'readme.md') return 1;
         return 0;
       });
 
       queueRef.current = files;
       currentIndexRef.current = 0;
-      dispatch({ type: 'SET_VAL', key: 'isIndexed', value: true });
-      addLog(`Indexed ${files.length} Target Files`, "success");
-    } catch (e) { addLog(`Indexing Failed`, "error"); }
-    finally { dispatch({ type: 'SET_STATUS', value: 'IDLE' }); }
+      dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'isIndexed', value: true });
+      addLog(`Indexed ${files.length} Target Files for processing.`, "success");
+      
+    } catch (e) { 
+        addLog(`Indexing Failed: ${e.message}`, "error"); 
+    } finally { 
+        dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE' }); 
+    }
   };
+
+
+  // --- Render Logic ---
 
   if (!state.isAcknowledged) {
     return (
@@ -370,13 +632,27 @@ export default function App() {
           <div className="text-6xl mb-6">🛰️</div>
           <h1 className="text-3xl font-black uppercase tracking-tighter mb-2 italic">Sovereign <span className="text-emerald-500">Lite</span></h1>
           <p className="text-[10px] text-zinc-600 uppercase tracking-[0.5em] mb-12 font-bold italic">Boundary Control v86.40</p>
-          <button onClick={() => dispatch({ type: 'ACKNOWLEDGE' })} className="w-full py-5 bg-white text-black rounded-2xl font-black uppercase text-[11px] tracking-widest transition-all">Engage</button>
+          <button onClick={() => dispatch({ type: ACTION_TYPES.ACKNOWLEDGE })} className="w-full py-5 bg-white text-black rounded-2xl font-black uppercase text-[11px] tracking-widest transition-all">Engage</button>
         </div>
       </div>
     );
   }
 
   if (!firebaseReady) return <div className="min-h-screen bg-black flex items-center justify-center font-mono text-zinc-800 tracking-widest text-[10px]">SYNCING_CHANNELS...</div>;
+
+  const toggleLiveHandler = () => {
+    if (state.isLive) {
+      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
+      // Crucially, abort any in-flight API call
+      abortControllerRef.current?.abort(); 
+    } else if (state.isIndexed) {
+      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
+    } else {
+      discover();
+    }
+  };
+
+  const statusColor = state.isLive ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500';
 
   return (
     <div className="min-h-screen bg-[#020202] text-zinc-300 p-4 md:p-10 font-mono text-[13px]">
@@ -387,34 +663,64 @@ export default function App() {
             <div>
               <h1 className="text-2xl font-black text-white uppercase italic">Sovereign <span className="text-emerald-500 text-sm">v86.40</span></h1>
               <div className="flex items-center gap-4 mt-1">
-                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${state.isLive ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500'}`}>{state.status}</span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${statusColor}`}>{state.status}</span>
                 <span className="text-[10px] text-zinc-500 truncate max-w-[200px]">{state.activePath}</span>
               </div>
             </div>
           </div>
           <div className="flex gap-4">
-            <button onClick={() => { if (state.isLive) { dispatch({ type: 'TOGGLE_LIVE' }); abortControllerRef.current?.abort(); } else if (state.isIndexed) dispatch({ type: 'TOGGLE_LIVE' }); else discover(); }} className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${state.isLive ? 'bg-red-600 text-white' : state.isIndexed ? 'bg-emerald-600 text-white' : 'bg-white text-black hover:bg-zinc-200'}`}>{state.isLive ? 'Stop' : state.isIndexed ? 'Run' : 'Sync'}</button>
+            <button onClick={toggleLiveHandler} className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${state.isLive ? 'bg-red-600 text-white' : state.isIndexed ? 'bg-emerald-600 text-white' : 'bg-white text-black hover:bg-zinc-200'}`}>
+                {state.isLive ? 'Stop' : state.isIndexed ? 'Run' : 'Sync'}
+            </button>
           </div>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           <aside className="lg:col-span-4 space-y-8">
              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] space-y-6">
-              <div className="space-y-2"><label className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Vault (owner/repo)</label><input type="text" value={state.targetRepo} onChange={e => dispatch({ type: 'SET_VAL', key: 'targetRepo', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none font-bold" /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Auth Secret</label><input type="password" onChange={e => ghTokenRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Gemini Key</label><input type="password" onChange={e => geminiKeyRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" /></div>
+              <div className="space-y-2">
+                <label htmlFor="repo-path" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Vault (owner/repo)</label>
+                <input id="repo-path" type="text" value={state.targetRepo} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'targetRepo', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none font-bold" />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="gh-token" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Auth Secret (GitHub Token)</label>
+                <input id="gh-token" type="password" onChange={e => ghTokenRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="gemini-key" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Gemini Key</label>
+                <input id="gemini-key" type="password" onChange={e => geminiKeyRef.current = e.target.value} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none" />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="model-select" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Model Tier</label>
+                <select id="model-select" value={state.selectedModel} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'selectedModel', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/5 rounded-xl p-4 text-white outline-none font-bold appearance-none">
+                  {MODELS.map(model => (
+                    <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </aside>
+          
           <main className="lg:col-span-8 space-y-8">
             <div className="grid grid-cols-3 gap-6 text-center">
               <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-3xl font-black text-emerald-500">{state.metrics.mutations}</div><div className="text-[9px] font-black uppercase text-zinc-600">Mutations</div></div>
-              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] relative overflow-hidden"><div className="text-3xl font-black text-white">{state.metrics.progress}%</div><div className="text-[9px] font-black uppercase text-zinc-600">Cycle</div><div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all" style={{ width: `${state.metrics.progress}%` }} /></div>
+              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] relative overflow-hidden">
+                <div className="text-3xl font-black text-white">{state.metrics.progress}%</div>
+                <div className="text-[9px] font-black uppercase text-zinc-600">Cycle Progress ({currentIndexRef.current}/{queueRef.current.length})</div>
+                <div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all" style={{ width: `${state.metrics.progress}%` }} />
+              </div>
               <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-3xl font-black text-red-500">{state.metrics.errors}</div><div className="text-[9px] font-black uppercase text-zinc-600">Spillovers</div></div>
             </div>
+            
             <div className="h-[400px] bg-black border border-white/5 rounded-[3rem] flex flex-col overflow-hidden">
               <div className="p-6 border-b border-white/5 bg-zinc-900/10 text-[10px] font-black uppercase tracking-widest text-zinc-500">Neural Log</div>
               <div className="flex-1 overflow-y-auto p-10 space-y-2 text-[12px] log-area scroll-smooth">
-                {state.logs.map(l => <div key={l.id} className="flex gap-4"><span className="text-zinc-800 font-bold shrink-0">{l.timestamp}</span><span className={l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : 'text-zinc-500'}>{l.msg}</span></div>)}
+                {state.logs.map(l => (
+                    <div key={l.id} className="flex gap-4">
+                        <span className="text-zinc-800 font-bold shrink-0">{l.timestamp}</span>
+                        <span className={l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : 'text-zinc-500'}>{l.msg}</span>
+                    </div>
+                ))}
               </div>
             </div>
           </main>
@@ -423,4 +729,4 @@ export default function App() {
       <style>{`.log-area::-webkit-scrollbar { display: none; }`}</style>
     </div>
   );
-  }
+}

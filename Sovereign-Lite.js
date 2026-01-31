@@ -5,24 +5,26 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged }
 // --- Configuration & Constants ---
 
 /**
- * Retrieves global configuration likely injected during build.
- * Ensures safe access to potentially undefined global variables.
+ * Loads configuration variables injected at runtime (e.g., build environment).
  */
-const getGlobalConfig = () => ({
-  APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign',
-  FIREBASE_CONFIG: typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null,
-  INITIAL_AUTH_TOKEN: typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null,
-});
+const loadRuntimeConfig = () => {
+  const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign';
+  const FIREBASE_CONFIG = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+  const INITIAL_AUTH_TOKEN = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+  return { APP_ID, FIREBASE_CONFIG, INITIAL_AUTH_TOKEN };
+};
+
+const RUNTIME_CONFIG = loadRuntimeConfig();
 
 const CONFIG = Object.freeze({
-  MAX_FILE_SIZE_BYTES: 1_000_000, 
-  CYCLE_INTERVAL_MS: 15_000,   
+  MAX_FILE_SIZE_BYTES: 1_000_000, // 1MB limit
+  CYCLE_INTERVAL_MS: 15_000,
   MAX_API_RETRIES: 5,
   LOCAL_STORAGE_PREFIX: 'emg_v86_',
   LOG_HISTORY_LIMIT: 60,
   GITHUB_API_BASE: 'https://api.github.com',
   GEMINI_API_BASE: 'https://generativelanguage.googleapis.com/v1beta',
-  ...getGlobalConfig()
+  ...RUNTIME_CONFIG
 });
 
 const MODELS = Object.freeze([
@@ -30,10 +32,10 @@ const MODELS = Object.freeze([
   { id: 'gemini-1.5-flash', label: 'Flash 1.5 Stable', tier: 2 }
 ]);
 
-const PIPELINES = Object.freeze({
-  CODE: [{ id: 'refactor', label: 'Refactor', text: 'Act as a Senior Software Engineer. Improve the logic of the provided code. CRITICAL: You must return ONLY the raw source code. Do not include markdown commentary, do not include hashtags, and do not include todo lists in the response. If you have "thoughts" or "plans", ignore them and only output the code.' }],
-  CONFIG: [{ id: 'validate', label: 'Lint', text: 'Act as a DevOps Engineer. Optimize configurations. Return only valid config format.' }],
-  DOCS: [{ id: 'clarify', label: 'Editor', text: 'Act as a Technical Writer. Improve documentation.' }]
+const PIPELINE_STEPS = Object.freeze({
+  CODE: [{ id: 'refactor', label: 'Refactor', prompt: 'Act as a Senior Software Engineer. Improve the logic of the provided code. CRITICAL: You must return ONLY the raw source code. Do not include markdown commentary, do not include hashtags, and do not include todo lists in the response. If you have "thoughts" or "plans", ignore them and only output the code.' }],
+  CONFIG: [{ id: 'validate', label: 'Lint', prompt: 'Act as a DevOps Engineer. Optimize configurations. Return only valid config format.' }],
+  DOCS: [{ id: 'clarify', label: 'Editor', prompt: 'Act as a Technical Writer. Improve documentation.' }]
 });
 
 const FILE_EXTENSIONS = Object.freeze({
@@ -55,40 +57,46 @@ const PERSIST_KEYS = new Set(['selectedModel', 'targetRepo']);
 const base64Decode = (str) => {
   try {
     const binaryString = atob(str);
-    const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
     return new TextDecoder().decode(bytes);
   } catch (e) {
     console.error("Base64 Decode failure:", e);
-    throw new Error(`Base64 Decode failure`);
+    throw new Error(`Base64 Decode failure: ${e.message}`);
   }
 };
 
 const base64Encode = (str) => {
   try {
     const bytes = new TextEncoder().encode(str);
-    const binaryString = String.fromCodePoint(...bytes);
+    // Convert bytes to a binary string for btoa
+    const binaryString = String.fromCharCode.apply(null, bytes);
     return btoa(binaryString);
   } catch (e) {
+    console.error("Base64 Encode failure:", e);
     return '';
   }
 };
 
 const parseRepoPath = (repoString) => {
   if (!repoString) return null;
-  const cleanString = repoString.replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
+  // Clean common GitHub URL prefixes
+  const cleanString = repoString.replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/\/$/, '');
   const match = cleanString.match(/^([^/]+)\/([^/]+)$/);
   return match ? [match[1], match[2]] : null;
 };
 
 const getPipeline = (filePath) => {
-  if (FILE_EXTENSIONS.CONFIG.test(filePath)) return PIPELINES.CONFIG;
-  if (FILE_EXTENSIONS.DOCS.test(filePath)) return PIPELINES.DOCS;
-  return PIPELINES.CODE;
+  if (FILE_EXTENSIONS.CONFIG.test(filePath)) return PIPELINE_STEPS.CONFIG;
+  if (FILE_EXTENSIONS.DOCS.test(filePath)) return PIPELINE_STEPS.DOCS;
+  return PIPELINE_STEPS.CODE;
 };
 
 // --- State Management: Reducer & Initial State ---
 
-const ACTION_TYPES = {
+const ACTION_TYPES = Object.freeze({
   SET_VALUE: 'SET_VALUE',
   ACKNOWLEDGE: 'ACKNOWLEDGE',
   TOGGLE_LIVE: 'TOGGLE_LIVE',
@@ -97,7 +105,7 @@ const ACTION_TYPES = {
   UPDATE_METRICS: 'UPDATE_METRICS',
   RESET_SESSION: 'RESET_SESSION',
   MARK_COMPLETE: 'MARK_COMPLETE',
-};
+});
 
 const initialMetrics = { mutations: 0, steps: 0, errors: 0, progress: 0 };
 
@@ -116,71 +124,75 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
-    case ACTION_TYPES.SET_VALUE:
-      if (PERSIST_KEYS.has(action.key)) {
-        localStorage.setItem(CONFIG.LOCAL_STORAGE_PREFIX + action.key, action.value);
+    case ACTION_TYPES.SET_VALUE: {
+      const { key, value } = action;
+      if (PERSIST_KEYS.has(key)) {
+        localStorage.setItem(CONFIG.LOCAL_STORAGE_PREFIX + key, value);
       }
-      return { ...state, [action.key]: action.value };
+      return { ...state, [key]: value };
+    }
 
     case ACTION_TYPES.ACKNOWLEDGE:
       return { ...state, isAcknowledged: true };
 
-    case ACTION_TYPES.TOGGLE_LIVE:
+    case ACTION_TYPES.TOGGLE_LIVE: {
       const newLive = !state.isLive;
-      return { 
-        ...state, 
-        isLive: newLive, 
-        status: newLive ? (state.isIndexed ? 'INITIALIZING' : 'READY') : 'IDLE', 
-        isComplete: false 
+      return {
+        ...state,
+        isLive: newLive,
+        status: newLive ? (state.isIndexed ? 'RUNNING' : 'INDEXING') : 'IDLE',
+        isComplete: false
       };
+    }
 
-    case ACTION_TYPES.ADD_LOG:
+    case ACTION_TYPES.ADD_LOG: {
       const newLog = { ...action.payload, id: Date.now() + Math.random() };
-      return { 
-        ...state, 
-        logs: [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT) 
-      };
+      const logs = [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT);
+      return { ...state, logs };
+    }
 
     case ACTION_TYPES.SET_STATUS:
       return { ...state, status: action.value, activePath: action.path || state.activePath };
 
     case ACTION_TYPES.UPDATE_METRICS: {
       const { m = 0, stepIncr = 0, e = 0, cursor, total } = action;
-      const progress = (total > 0 && cursor !== undefined) 
-        ? Math.min(100, Math.round((cursor / total) * 100)) 
-        : state.metrics.progress;
-      
-      return { 
-        ...state, 
-        metrics: { 
-          mutations: state.metrics.mutations + m, 
-          steps: state.metrics.steps + stepIncr, 
-          errors: state.metrics.errors + e, 
-          progress 
-        } 
+      let progress = state.metrics.progress;
+
+      if (total > 0 && cursor !== undefined) {
+        progress = Math.min(100, Math.round((cursor / total) * 100));
+      }
+
+      return {
+        ...state,
+        metrics: {
+          mutations: state.metrics.mutations + m,
+          steps: state.metrics.steps + stepIncr,
+          errors: state.metrics.errors + e,
+          progress
+        }
       };
     }
 
     case ACTION_TYPES.RESET_SESSION:
-      return { 
-        ...state, 
-        isIndexed: false, 
-        isComplete: false, 
-        metrics: initialMetrics, 
-        status: 'IDLE', 
-        activePath: 'Ready' 
+      return {
+        ...state,
+        isIndexed: false,
+        isComplete: false,
+        metrics: initialMetrics,
+        status: 'IDLE',
+        activePath: 'Ready'
       };
 
     case ACTION_TYPES.MARK_COMPLETE:
-      return { 
-        ...state, 
-        isComplete: true, 
-        isIndexed: false, 
-        isLive: false, 
-        status: 'FINISHED', 
-        activePath: 'Queue Complete' 
+      return {
+        ...state,
+        isComplete: true,
+        isIndexed: false,
+        isLive: false,
+        status: 'FINISHED',
+        activePath: 'Queue Complete'
       };
-      
+
     default:
       return state;
   }
@@ -191,43 +203,48 @@ function reducer(state, action) {
 /**
  * Hook for managing Firebase initialization and authentication.
  */
-function useFirebaseAuth(dispatch, setUser) {
+function useFirebaseAuth(setUser) {
   const [firebaseReady, setFirebaseReady] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
     const { FIREBASE_CONFIG, INITIAL_AUTH_TOKEN } = CONFIG;
 
     if (!FIREBASE_CONFIG) {
-        if (isMounted) setFirebaseReady(true);
-        return;
+      setFirebaseReady(true);
+      return;
     }
+
+    let authUnsubscribe = () => {};
 
     const initFirebase = async () => {
       try {
         const app = initializeApp(FIREBASE_CONFIG);
         const auth = getAuth(app);
 
-        const userCredential = INITIAL_AUTH_TOKEN 
+        // Authentication step
+        INITIAL_AUTH_TOKEN
           ? await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN)
           : await signInAnonymously(auth);
-        
-        onAuthStateChanged(auth, (u) => { 
-          if (isMounted) { 
-            setUser(u); 
-            setFirebaseReady(true); 
-          }
+
+        // Listener setup
+        authUnsubscribe = onAuthStateChanged(auth, (u) => {
+          setUser(u);
+          setFirebaseReady(true);
         });
+
       } catch (e) {
-        if (isMounted) {
-            console.error("Firebase Initialization Failed:", e);
-            setFirebaseReady(true);
-        }
+        console.error("Firebase Initialization Failed:", e);
+        setFirebaseReady(true);
       }
     };
+
     initFirebase();
-    return () => { isMounted = false; };
-  }, [dispatch, setUser]);
+
+    // Cleanup function: unsubscribe from auth listener
+    return () => {
+      authUnsubscribe();
+    };
+  }, [setUser]);
 
   return firebaseReady;
 }
@@ -236,27 +253,27 @@ function useFirebaseAuth(dispatch, setUser) {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [user, setUser] = useState(null);
-  
+
   // Refs for holding dynamic state/credentials that don't trigger re-renders
   const ghTokenRef = useRef('');
   const geminiKeyRef = useRef('');
-  const projectContextRef = useRef(''); 
-  const customInstructionsRef = useRef(''); 
+  const projectContextRef = useRef('');
+  const customInstructionsRef = useRef('');
   const readmeDataRef = useRef({ path: '', sha: '', content: '' });
   const todoFileRef = useRef({ path: '', sha: '', content: '' });
-  
+
   // Refs for cycle control flow
   const isProcessingRef = useRef(false);
   const queueRef = useRef([]);
   const currentIndexRef = useRef(0);
   const abortControllerRef = useRef(null);
 
-  const firebaseReady = useFirebaseAuth(dispatch, setUser);
+  const firebaseReady = useFirebaseAuth(setUser);
 
   const addLog = useCallback((msg, type = 'info') => {
-    dispatch({ 
-      type: ACTION_TYPES.ADD_LOG, 
-      payload: { msg, type, timestamp: new Date().toLocaleTimeString([], { hour12: false }) } 
+    dispatch({
+      type: ACTION_TYPES.ADD_LOG,
+      payload: { msg, type, timestamp: new Date().toLocaleTimeString([], { hour12: false }) }
     });
   }, []);
 
@@ -264,7 +281,8 @@ export default function App() {
 
   const callGeminiAPI = useCallback(async (payload, modelId, apiKey, retryCount = 0) => {
     const url = `${CONFIG.GEMINI_API_BASE}/models/${modelId}:generateContent?key=${apiKey}`;
-    
+
+    // Use the global ref for cycle cancellation
     abortControllerRef.current = new AbortController();
     try {
       const res = await fetch(url, {
@@ -276,20 +294,21 @@ export default function App() {
 
       if (!res.ok) {
         const errorBody = await res.json().catch(() => ({}));
-        throw new Error(`API Error: ${res.status} ${errorBody?.error?.message || ''}`);
+        throw new Error(`API Error: ${res.status} ${errorBody?.error?.message || 'Unknown API failure'}`);
       }
 
       const data = await res.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!text) throw new Error("Empty or Malformed Response");
-      
-      // Aggressively clean common markdown wrappers
-      return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
+
+      if (!text) throw new Error("Empty or Malformed Response from LLM");
+
+      // Aggressively clean common markdown wrappers (e.g., ```language\n...\n```)
+      const cleanedText = text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
+      return cleanedText;
 
     } catch (e) {
       if (e.name === 'AbortError') throw e;
-      
+
       if (retryCount < CONFIG.MAX_API_RETRIES && state.isLive) {
         const delay = Math.pow(2, retryCount) * 1000;
         addLog(`API call failed for ${modelId}. Retrying in ${delay/1000}s...`, 'warning');
@@ -302,22 +321,23 @@ export default function App() {
 
 
   const generateContent = useCallback((prompt, personaText, modelId, apiKey, context, instructions) => {
+    const systemPrompt = `
+      SYSTEM_CONTEXT: ${context || 'No project context provided.'}
+      USER_TODO_LIST: ${instructions || 'No specific instructions provided.'}
+      AGENT_ROLE: ${personaText}
+
+      CRITICAL INSTRUCTION: You must return ONLY the raw source code/text requested. Do not include markdown commentary, do not include hashtags, and do not include todo lists in the response. Do not echo the system context or role.
+    `.trim();
+
     const payload = {
-      contents: [{ 
-        parts: [{ 
-          text: `
-            SYSTEM_CONTEXT: ${context}
-            USER_TODO_LIST: ${instructions}
-            AGENT_ROLE: ${personaText}
-            
-            INPUT_DATA_TO_PROCESS:
-            ${prompt}
-          ` 
-        }] 
+      contents: [{
+        parts: [{
+          text: `${systemPrompt}\n\nINPUT_DATA_TO_PROCESS:\n${prompt}`
+        }]
       }],
-      generationConfig: { 
-        temperature: 0.1, 
-        responseMimeType: "text/plain" 
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: "text/plain"
       }
     };
     return callGeminiAPI(payload, modelId, apiKey);
@@ -327,30 +347,30 @@ export default function App() {
   const updateTodoAndPlan = useCallback(async (owner, repo, token, apiKey, modelId, fileProcessed, codeSummary) => {
     const todoFile = todoFileRef.current;
     if (!todoFile.path || !todoFile.sha) return;
-    
+
     const prompt = `
       Act as a Project Manager. Update the Markdown TODO list based on the recent change.
       File just changed: "${fileProcessed}"
       Change Summary: ${codeSummary}
-      
+
       Current List:
       ${todoFile.content || "Empty"}
-      
+
       Output the updated Markdown list ONLY.
     `;
 
     try {
       const updatedMarkdown = await generateContent(prompt, "Project Management Mode", modelId, apiKey, "", "");
-      
-      // Sanity check for meaningful output
-      if (updatedMarkdown && updatedMarkdown.trim().length > 50) { 
+
+      // Sanity check for meaningful output (must be significantly long to be a valid list)
+      if (updatedMarkdown && updatedMarkdown.trim().length > 50) {
         const url = `${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${todoFile.path}`;
-        
+
         const putRes = await fetch(url, {
           method: 'PUT',
-          headers: { 
-            'Authorization': `token ${token}`, 
-            'Content-Type': 'application/json' 
+          headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             message: `[Sovereign] Roadmap Update: ${fileProcessed}`,
@@ -361,6 +381,7 @@ export default function App() {
 
         if (putRes.ok) {
           const resData = await putRes.json();
+          // Update ref immediately to ensure subsequent cycles use the new SHA/Content
           todoFileRef.current.content = updatedMarkdown;
           todoFileRef.current.sha = resData.content.sha;
           addLog("Roadmap Updated Successfully", "success");
@@ -369,8 +390,8 @@ export default function App() {
             addLog(`Failed to commit Roadmap update (HTTP ${putRes.status}): ${errBody.message || 'Unknown error'}`, "warning");
         }
       }
-    } catch (e) { 
-      addLog(`Roadmap synchronization failed: ${e.message}`, "warning"); 
+    } catch (e) {
+      addLog(`Roadmap synchronization failed: ${e.message}`, "warning");
     }
   }, [generateContent, addLog]);
 
@@ -379,12 +400,12 @@ export default function App() {
    */
   const processFile = useCallback(async (filePath, owner, repo, token, apiKey, modelId) => {
     const fileName = filePath.toLowerCase().split('/').pop();
-    const isTodo = TODO_FILE_NAMES.includes(fileName);
+    const isTodoFile = TODO_FILE_NAMES.includes(fileName);
     const pathEncoded = filePath.split('/').map(encodeURIComponent).join('/');
     const url = `${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${pathEncoded}`;
-    const headers = { 
-        'Authorization': `token ${token}`, 
-        'Accept': 'application/vnd.github.v3+json' 
+    const headers = {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json'
     };
 
     // 1. Fetch File Content
@@ -395,47 +416,47 @@ export default function App() {
     const data = await res.json();
     let content = base64Decode(data.content);
     const sha = data.sha;
-    
+
     // 2. Handle Special Files (Context/Instructions)
-    if (isTodo) {
+    if (isTodoFile) {
       customInstructionsRef.current = content;
       todoFileRef.current = { path: filePath, sha, content };
       addLog(`Mastered Tasks: ${fileName}`, "success");
       return { status: 'CONTEXT_LOADED' };
     }
-    
+
     if (fileName === 'readme.md') {
-      projectContextRef.current = content.slice(0, 3000); 
+      // Truncate context to avoid excessive token usage
+      projectContextRef.current = content.slice(0, 3000);
       readmeDataRef.current = { path: filePath, sha, content };
       addLog(`Loaded Project Context: ${fileName}`, "success");
       return { status: 'CONTEXT_LOADED' };
     }
 
-    // 3. Apply AI Pipeline (Only process files that pass initial configuration/size checks)
+    // 3. Apply AI Pipeline
     const pipeline = getPipeline(filePath);
     let currentContent = content;
     let mutated = false;
-    
+
     for (const step of pipeline) {
       if (!state.isLive) break;
 
       dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'EVOLVING', path: filePath });
-      
+
       const processed = await generateContent(
-        currentContent, 
-        step.text, 
-        modelId, 
-        apiKey, 
-        projectContextRef.current, 
+        currentContent,
+        step.prompt, // Use step.prompt instead of step.text
+        modelId,
+        apiKey,
+        projectContextRef.current,
         customInstructionsRef.current
       );
-      
-      // Guard: Block outputs that look like LLM chatter or incomplete markdown blocks
-      const isCode = FILE_EXTENSIONS.CODE.test(filePath);
-      if (isCode && (processed.includes('##') || processed.includes('Act as a'))) {
-        addLog(`Blocked Invalid Output for ${fileName} (Format Spillover Detected)`, "error");
+
+      // Strict Validation: Check for LLM preamble or commentary spillover
+      if (processed.startsWith('SYSTEM_CONTEXT') || processed.startsWith('USER_TODO_LIST') || processed.startsWith('AGENT_ROLE')) {
+        addLog(`Blocked Invalid Output for ${fileName} (Prompt Echo Detected)`, "error");
         dispatch({ type: ACTION_TYPES.UPDATE_METRICS, e: 1 });
-        continue; 
+        continue;
       }
 
       // Check for effective change and size limit
@@ -443,7 +464,7 @@ export default function App() {
         currentContent = processed;
         mutated = true;
       }
-      
+
       dispatch({ type: ACTION_TYPES.UPDATE_METRICS, stepIncr: 1 });
     }
 
@@ -452,13 +473,13 @@ export default function App() {
       const putRes = await fetch(url, {
         method: 'PUT',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          message: `[Sovereign] Logic Evolution: ${filePath}`, 
-          content: base64Encode(currentContent), 
-          sha 
+        body: JSON.stringify({
+          message: `[Sovereign] Logic Evolution: ${filePath}`,
+          content: base64Encode(currentContent),
+          sha
         })
       });
-      
+
       if (putRes.ok) {
         // 5. Update Roadmap asynchronously after successful commit
         await updateTodoAndPlan(owner, repo, token, apiKey, modelId, filePath, "Applied architectural refactoring.");
@@ -468,9 +489,9 @@ export default function App() {
         throw new Error(`GitHub Commit Failure (${putRes.status}): ${errorData.message}`);
       }
     }
-    
+
     return { status: 'SKIPPED' };
-  }, [state.isLive, addLog, generateContent, updateTodoAndPlan]);
+  }, [state.isLive, addLog, generateContent, updateTodoAndPlan, projectContextRef, customInstructionsRef]);
 
 
   /**
@@ -478,10 +499,10 @@ export default function App() {
    */
   const runCycle = useCallback(async () => {
     if (!state.isLive || isProcessingRef.current || !state.isIndexed) return;
-    
+
     const target = queueRef.current[currentIndexRef.current];
     const repoPath = parseRepoPath(state.targetRepo);
-    
+
     if (!repoPath) {
         addLog("Invalid repository path configured. Stopping.", "error");
         dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
@@ -492,27 +513,27 @@ export default function App() {
       dispatch({ type: ACTION_TYPES.MARK_COMPLETE });
       return;
     }
-    
+
     isProcessingRef.current = true;
     const [owner, repo] = repoPath;
 
     try {
       const result = await processFile(
-        target, 
-        owner, 
-        repo, 
-        ghTokenRef.current, 
-        geminiKeyRef.current, 
+        target,
+        owner,
+        repo,
+        ghTokenRef.current,
+        geminiKeyRef.current,
         state.selectedModel
       );
-      
+
       if (result.status === 'MUTATED') {
         addLog(`MUTATED: ${target.split('/').pop()}`, "success");
         dispatch({ type: ACTION_TYPES.UPDATE_METRICS, m: 1 });
       } else if (result.status === 'SKIPPED') {
         addLog(`SCAN: ${target.split('/').pop()}`, "info");
       }
-      
+
     } catch (e) {
       if (e.name !== 'AbortError') {
         addLog(`FAULT [${target.split('/').pop()}]: ${e.message}`, "error");
@@ -522,10 +543,10 @@ export default function App() {
       }
     } finally {
       currentIndexRef.current++;
-      dispatch({ 
-        type: ACTION_TYPES.UPDATE_METRICS, 
-        cursor: currentIndexRef.current, 
-        total: queueRef.current.length 
+      dispatch({
+        type: ACTION_TYPES.UPDATE_METRICS,
+        cursor: currentIndexRef.current,
+        total: queueRef.current.length
       });
       isProcessingRef.current = false;
       dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE', path: 'Neural Standby' });
@@ -533,40 +554,27 @@ export default function App() {
   }, [state.isLive, state.targetRepo, state.selectedModel, state.isIndexed, addLog, processFile]);
 
 
-  // --- Effects ---
-
-  // Polling/Cycle Effect
-  useEffect(() => {
-    if (!state.isLive || !state.isIndexed) return;
-    
-    const timer = setInterval(runCycle, CONFIG.CYCLE_INTERVAL_MS);
-    runCycle(); // Run immediately on activation
-    
-    return () => clearInterval(timer);
-  }, [state.isLive, state.isIndexed, runCycle]);
-
-
   /**
    * Fetches the repo tree, filters files, and initializes the queue.
    */
-  const discover = async () => {
+  const discover = useCallback(async () => {
     const repoPath = parseRepoPath(state.targetRepo);
     if (!repoPath || !ghTokenRef.current || !geminiKeyRef.current) {
         addLog("Configuration missing (Repo Path, GitHub Token, or Gemini Key).", "error");
         return;
     }
-    
+
     dispatch({ type: ACTION_TYPES.RESET_SESSION });
     dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'INDEXING' });
 
     try {
       const [owner, repo] = repoPath;
-      const headers = { 
-          'Authorization': `token ${ghTokenRef.current}`, 
-          'Accept': 'application/vnd.github.v3+json' 
+      const headers = {
+          'Authorization': `token ${ghTokenRef.current}`,
+          'Accept': 'application/vnd.github.v3+json'
       };
 
-      // 1. Get Default Branch (using simplified path to avoid extra object mapping if possible)
+      // 1. Get Default Branch
       const rRes = await fetch(`${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}`, { headers });
       if (!rRes.ok) throw new Error(`Repo access failed (${rRes.status})`);
       const rData = await rRes.json();
@@ -576,27 +584,27 @@ export default function App() {
       const tRes = await fetch(`${CONFIG.GITHUB_API_BASE}/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers });
       if (!tRes.ok) throw new Error(`Tree fetch failed (${tRes.status})`);
       const tData = await tRes.json();
-      
+
       // 3. Filter and Sort Files
       let files = (tData?.tree || [])
-        .filter(f => 
-            f.type === 'blob' && 
-            f.size < CONFIG.MAX_FILE_SIZE_BYTES && 
-            !SKIP_PATTERNS.some(p => p.test(f.path)) && 
+        .filter(f =>
+            f.type === 'blob' &&
+            f.size < CONFIG.MAX_FILE_SIZE_BYTES &&
+            !SKIP_PATTERNS.some(p => p.test(f.path)) &&
             (FILE_EXTENSIONS.CODE.test(f.path) || FILE_EXTENSIONS.CONFIG.test(f.path) || FILE_EXTENSIONS.DOCS.test(f.path))
         ).map(f => f.path);
-      
-      // Prioritize instruction files and context files
+
+      // Prioritize instruction files and context files (README, TODO)
       files.sort((a, b) => {
         const aL = a.toLowerCase().split('/').pop();
         const bL = b.toLowerCase().split('/').pop();
-        
+
         const aIsTodo = TODO_FILE_NAMES.includes(aL);
         const bIsTodo = TODO_FILE_NAMES.includes(bL);
 
         if (aIsTodo && !bIsTodo) return -1;
         if (bIsTodo && !aIsTodo) return 1;
-        
+
         if (aL === 'readme.md' && bL !== 'readme.md') return -1;
         if (bL === 'readme.md' && aL !== 'readme.md') return 1;
         return 0;
@@ -606,19 +614,49 @@ export default function App() {
       currentIndexRef.current = 0;
       dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'isIndexed', value: true });
       addLog(`Indexed ${files.length} Target Files for processing.`, "success");
-      
-    } catch (e) { 
-        addLog(`Indexing Failed: ${e.message}`, "error"); 
-    } finally { 
-        // Only update status to IDLE if not complete or stopping
+
+    } catch (e) {
+        addLog(`Indexing Failed: ${e.message}`, "error");
+    } finally {
         if (!state.isLive) {
-            dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE' }); 
+            dispatch({ type: ACTION_TYPES.SET_STATUS, value: 'IDLE' });
         }
     }
-  };
+  }, [state.targetRepo, addLog]);
+
+
+  // Polling/Cycle Effect
+  useEffect(() => {
+    if (!state.isLive || !state.isIndexed) return;
+
+    // Use requestAnimationFrame or a tighter loop if performance was critical,
+    // but setInterval is appropriate for a long-running, low-frequency background task.
+    const timer = setInterval(runCycle, CONFIG.CYCLE_INTERVAL_MS);
+    runCycle(); // Run immediately on activation
+
+    return () => clearInterval(timer);
+  }, [state.isLive, state.isIndexed, runCycle]);
 
 
   // --- Render Logic ---
+
+  const toggleLiveHandler = () => {
+    if (state.isLive) {
+      // Stop sequence
+      abortControllerRef.current?.abort();
+      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
+    } else if (state.isIndexed) {
+      // Start sequence (if already indexed)
+      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
+    } else {
+      // Discover and then start
+      discover();
+    }
+  };
+
+  const buttonDisabled = useMemo(() => (
+    !state.targetRepo || !ghTokenRef.current || !geminiKeyRef.current
+  ), [state.targetRepo]);
 
   if (!state.isAcknowledged) {
     return (
@@ -635,19 +673,7 @@ export default function App() {
 
   if (!firebaseReady) return <div className="min-h-screen bg-black flex items-center justify-center font-mono text-zinc-800 tracking-widest text-[10px]">ESTABLISHING_SECURE_LINK...</div>;
 
-  const toggleLiveHandler = () => {
-    if (state.isLive) {
-      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
-      abortControllerRef.current?.abort(); 
-    } else if (state.isIndexed) {
-      dispatch({ type: ACTION_TYPES.TOGGLE_LIVE });
-    } else {
-      discover();
-    }
-  };
-
   const statusColor = state.isLive ? 'bg-emerald-600 text-white' : state.isComplete ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-500';
-  const buttonDisabled = !state.targetRepo || !ghTokenRef.current || !geminiKeyRef.current;
 
   return (
     <div className="min-h-screen bg-[#020202] text-zinc-300 p-4 md:p-10 font-mono text-[13px]">
@@ -664,12 +690,12 @@ export default function App() {
             </div>
           </div>
           <div className="flex gap-4">
-            <button 
-                onClick={toggleLiveHandler} 
+            <button
+                onClick={toggleLiveHandler}
                 disabled={buttonDisabled && !state.isLive}
-                className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all 
-                ${state.isLive ? 'bg-red-600 text-white hover:bg-red-500' 
-                : state.isIndexed ? 'bg-emerald-600 text-white hover:bg-emerald-500' 
+                className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all
+                ${state.isLive ? 'bg-red-600 text-white hover:bg-red-500'
+                : state.isIndexed ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                 : 'bg-white text-black hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600'}`}
             >
                 {state.isLive ? 'Halt' : state.isIndexed ? 'Activate' : 'Discover & Sync'}
@@ -681,7 +707,7 @@ export default function App() {
           <aside className="lg:col-span-4 space-y-8">
              <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] space-y-6">
               <h3 className="text-[11px] font-bold uppercase text-emerald-400 border-b border-white/10 pb-2">Credentials & Targets</h3>
-              
+
               <div className="space-y-2">
                 <label htmlFor="repo-path" className="text-[10px] font-black text-zinc-600 uppercase tracking-tighter">Vault (owner/repo)</label>
                 <input id="repo-path" type="text" value={state.targetRepo} onChange={e => dispatch({ type: ACTION_TYPES.SET_VALUE, key: 'targetRepo', value: e.target.value })} disabled={state.isLive || state.isIndexed} className="w-full bg-black border border-white/10 rounded-xl p-4 text-white outline-none font-bold text-sm" placeholder="e.g., user/repo-name" />
@@ -704,7 +730,7 @@ export default function App() {
               </div>
             </div>
           </aside>
-          
+
           <main className="lg:col-span-8 space-y-8">
             <div className="grid grid-cols-3 gap-6 text-center">
               <div className="p-6 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-4xl font-black text-emerald-500">{state.metrics.mutations}</div><div className="text-[10px] font-black uppercase text-zinc-600 mt-1">Mutations</div></div>
@@ -715,11 +741,11 @@ export default function App() {
               </div>
               <div className="p-6 bg-zinc-900/30 border border-white/5 rounded-[2.5rem]"><div className="text-4xl font-black text-red-500">{state.metrics.errors}</div><div className="text-[10px] font-black uppercase text-zinc-600 mt-1">Spillovers</div></div>
             </div>
-            
+
             <div className="h-[450px] bg-black border border-white/5 rounded-[3rem] flex flex-col overflow-hidden">
               <div className="p-4 border-b border-white/5 bg-zinc-900/10 text-[10px] font-black uppercase tracking-widest text-zinc-500">Neural Log</div>
               <div className="flex-1 overflow-y-auto p-4 space-y-2 text-[12px] log-area">
-                {state.logs.map((l, index) => (
+                {state.logs.map((l) => (
                     <div key={l.id} className="flex gap-4 transition-opacity duration-500 opacity-100">
                         <span className="text-zinc-800 font-bold shrink-0">{l.timestamp}</span>
                         <span className={l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : 'text-zinc-500'}>{l.msg}</span>
@@ -730,7 +756,7 @@ export default function App() {
           </main>
         </div>
       </div>
-      {/* Inline style for scrollbar customization is cleaner than external CSS for self-contained components */}
+      {/* Inline style for scrollbar customization */}
       <style jsx global>{`
         .log-area::-webkit-scrollbar {
             width: 6px;

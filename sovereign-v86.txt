@@ -15,20 +15,21 @@ import {
  * Sovereign v86: Multi-Model Production Kernel
  *
  * This core application component manages the agent's lifecycle,
- * authentication, configuration, and execution loop.
- * Features include: exponential backoff, Firestore batching, and real-time model health tracking.
+ * authentication, configuration, and the autonomous execution loop.
+ * It utilizes React hooks (useReducer, useCallback) for state management
+ * and integrates Firebase Firestore for real-time data persistence and insights.
  */
 
 const CORE_CONFIG = {
-  BATCH_SIZE: 5,
-  BUFFER_MAX: 50,
-  CYCLE_INTERVAL: 45000, // 45 seconds
+  BATCH_SIZE: 5, // Number of mutations to buffer before committing to Firestore.
+  BUFFER_MAX: 50, // Maximum size of the local file queue (currently unused in filtering).
+  CYCLE_INTERVAL: 45000, // 45 seconds - Polling interval for the runCycle execution loop.
   MODELS: [
     { id: 'gemini-2.5-flash-lite-preview-09-2025', label: 'Lite', tier: 'Lite' },
     { id: 'gemini-2.5-flash-preview-09-2025', label: 'Flash 2.5', tier: 'Pro' },
     { id: 'gemini-3-flash-preview-09-2025', label: 'Flash 3.0', tier: 'Exp' }
   ],
-  APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign'
+  APP_ID: typeof __app_id !== 'undefined' ? __app_id : 'emg-v86-sovereign' // Unique application identifier for Firestore partitioning.
 };
 
 // Initialize Firebase services
@@ -38,41 +39,56 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 const initialState = {
-  isLive: false,
-  isAcknowledged: false,
-  status: 'IDLE',
-  activePath: 'Ready',
-  selectedModel: localStorage.getItem('emg_active_model_v86') || CORE_CONFIG.MODELS[0].id,
-  modelHealth: JSON.parse(localStorage.getItem('emg_health_v86')) || {},
-  targetRepo: localStorage.getItem('emg_repo_v86') || '',
-  logs: [],
-  insights: [],
-  bufferCount: 0,
-  metrics: { mutations: 0, skipped: 0, errors: 0, latency: 0, progress: 0 }
+  isLive: false, // Flag indicating if the autonomous cycle is running.
+  isAcknowledged: false, // Flag for the initial landing screen bypass.
+  status: 'IDLE', // Current operational status (IDLE, SCAN, ANALYZING, etc.).
+  activePath: 'Ready', // The file path currently being processed.
+  selectedModel: localStorage.getItem('emg_active_model_v86') || CORE_CONFIG.MODELS[0].id, // The currently active Gemini model ID.
+  modelHealth: JSON.parse(localStorage.getItem('emg_health_v86')) || {}, // Tracks rate-limiting blocks per model.
+  targetRepo: localStorage.getItem('emg_repo_v86') || '', // Target GitHub repository path (e.g., 'owner/repo').
+  logs: [], // Console output history.
+  insights: [], // Real-time insights fetched from Firestore.
+  bufferCount: 0, // Current count of pending mutations in the local buffer.
+  metrics: { mutations: 0, skipped: 0, errors: 0, latency: 0, progress: 0 } // Operational statistics.
 };
 
+/**
+ * State management reducer for the application.
+ * @param {object} state - The current state object.
+ * @param {object} action - The action object containing type and payload.
+ * @returns {object} The new state.
+ */
 function reducer(state, action) {
   switch (action.type) {
     case 'SET_VAL':
+      // Sets a generic key-value pair, persisting targetRepo and selectedModel to localStorage.
       if (action.key === 'targetRepo') localStorage.setItem('emg_repo_v86', action.value);
       if (action.key === 'selectedModel') localStorage.setItem('emg_active_model_v86', action.value);
       return { ...state, [action.key]: action.value };
     case 'ACKNOWLEDGE':
+      // Bypasses the initial landing screen.
       return { ...state, isAcknowledged: true };
     case 'TOGGLE':
+      // Toggles the main operational state (isLive).
       const newLive = !state.isLive;
       return { ...state, isLive: newLive, status: newLive ? 'INITIALIZING' : 'IDLE', activePath: 'Ready' };
     case 'LOG':
+      // Adds a new log entry, truncating the list to 40 items.
       return { ...state, logs: [{ ...action.payload, id: Date.now() + Math.random() }, ...state.logs].slice(0, 40) };
     case 'UPDATE_METRICS':
+      // Updates operational metrics (mutations, errors, latency, progress).
       return { ...state, metrics: { ...state.metrics, ...action.payload } };
     case 'SET_BUFFER':
+      // Updates the count of items in the local mutation buffer.
       return { ...state, bufferCount: action.value };
     case 'SET_INSIGHTS':
+      // Sets the list of archived insights (from Firestore).
       return { ...state, insights: action.payload };
     case 'SET_STATUS':
+      // Updates the current operational status and active file path.
       return { ...state, status: action.value, activePath: action.path || state.activePath };
     case 'SET_MODEL_BLOCK':
+      // Updates the health status of a model, typically due to rate limiting (429).
       const newHealth = { ...state.modelHealth, [action.modelId]: { isBlocked: action.blocked, resetAt: action.resetAt } };
       localStorage.setItem('emg_health_v86', JSON.stringify(newHealth));
       return { ...state, modelHealth: newHealth };
@@ -88,16 +104,16 @@ export default function App() {
   // Refs for sensitive inputs and operational state
   const ghTokenRef = useRef('');
   const geminiKeyRef = useRef('');
-  const isBusy = useRef(false);
-  const queueRef = useRef([]);
-  const indexRef = useRef(parseInt(localStorage.getItem('emg_cursor_v86'), 10) || 0);
-  const mutationBuffer = useRef([]);
-  const metricsRef = useRef(state.metrics);
+  const isBusy = useRef(false); // Prevents concurrent execution of runCycle
+  const queueRef = useRef([]); // The list of files pending refactoring
+  const indexRef = useRef(parseInt(localStorage.getItem('emg_cursor_v86'), 10) || 0); // Current position in the queue
+  const mutationBuffer = useRef([]); // Local buffer for pending Firestore writes
+  const metricsRef = useRef(state.metrics); // Syncs metrics for safe access within async loops
 
   /**
    * Pushes a new message to the console log.
    * @param {string} msg - The message content.
-   * @param {('info'|'error'|'success')} type - The log type.
+   * @param {('info'|'error'|'success')} [type='info'] - The log type, affecting color coding.
    */
   const pushLog = (msg, type = 'info') => dispatch({
     type: 'LOG',
@@ -131,6 +147,7 @@ export default function App() {
   // Real-time Data Synchronization (Insights)
   useEffect(() => {
     if (!user) return;
+    // Query for the 15 most recent insights for the current user.
     const q = query(collection(db, 'artifacts', CORE_CONFIG.APP_ID, 'users', user.uid, 'insights'), limit(15));
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -143,6 +160,7 @@ export default function App() {
 
   /**
    * Flushes the current mutation buffer to Firestore using batch writes.
+   * This persists the record of successful refactoring operations (insights).
    */
   const flushMutationBuffer = async () => {
     if (mutationBuffer.current.length === 0 || !user) return;
@@ -167,6 +185,13 @@ export default function App() {
 
   /**
    * Fetches a resource with exponential backoff and handles rate limiting (429).
+   * If a 429 is received, the current model is blocked for 60 seconds.
+   * @param {string} url - The resource URL.
+   * @param {object} [options={}] - Fetch options.
+   * @param {number} [retries=5] - Maximum number of retries.
+   * @param {number} [backoff=1000] - Initial backoff delay in milliseconds.
+   * @returns {Promise<Response>} The successful fetch response.
+   * @throws {Error} If all retries fail or a non-recoverable error occurs.
    */
   const fetchWithRetry = async (url, options = {}, retries = 5, backoff = 1000) => {
     const controller = new AbortController();
@@ -193,6 +218,7 @@ export default function App() {
 
   /**
    * Core execution loop for scanning, analyzing, and committing refactoring changes.
+   * This function runs periodically based on CORE_CONFIG.CYCLE_INTERVAL.
    */
   const runCycle = useCallback(async () => {
     if (!state.isLive || isBusy.current || !user) return;
@@ -225,6 +251,7 @@ export default function App() {
       const headers = { 'Authorization': `token ${ghToken}`, 'Accept': 'application/vnd.github.v3+json' };
 
       // 1. Queue Building (Initial Scan)
+      // Fetches the repository tree recursively if the queue is empty.
       if (queueRef.current.length === 0) {
         dispatch({ type: 'SET_STATUS', value: 'SCAN' });
         const rRes = await fetchWithRetry(`https://api.github.com/repos/${repo}`, { headers });
@@ -243,18 +270,19 @@ export default function App() {
         return;
       }
 
-      // 2. Fetch Content
+      // 2. Fetch Content (GitHub API)
       dispatch({ type: 'SET_STATUS', value: 'ANALYZING', path: currentPath });
       const fRes = await fetchWithRetry(`https://api.github.com/repos/${repo}/contents/${currentPath}`, { headers });
       const fData = await fRes.json();
 
-      // Utility functions for handling GitHub's Base64 content encoding
+      /** Converts Base64 content string to UTF-8 source code. */
       const b64ToUtf8 = (str) => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+      /** Converts UTF-8 source code to Base64 content string for GitHub API. */
       const utf8ToB64 = (str) => btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (m, p) => String.fromCharCode('0x' + p)));
 
       const raw = b64ToUtf8(fData.content);
 
-      // 3. AI Logic (Refactoring Request)
+      // 3. AI Logic (Refactoring Request to Gemini)
       const aiRes = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${state.selectedModel}:generateContent?key=${geminiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -262,10 +290,10 @@ export default function App() {
       });
 
       const aiData = await aiRes.json();
-      // Strip markdown code fences (e.g., ```javascript ... ```)
+      // Clean the response: Strip markdown code fences (e.g., ```javascript ... ```)
       const optimized = aiData?.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
 
-      // 4. Commit Strategy
+      // 4. Commit Strategy (Pushing changes back to GitHub)
       if (!optimized || optimized === raw) {
         outcome = 'SKIP';
         pushLog(`No change detected for ${currentPath.split('/').pop()}`);
@@ -276,7 +304,7 @@ export default function App() {
           body: JSON.stringify({
             message: `[Sovereign v86] Optimized ${currentPath}`,
             content: utf8ToB64(optimized),
-            sha: fData.sha
+            sha: fData.sha // Required for optimistic locking/version control
           })
         });
 
@@ -298,6 +326,7 @@ export default function App() {
       outcome = 'ERROR';
     } finally {
       // 5. Update Metrics and Cursor
+      // Calculates progress, updates metrics, and advances the file cursor.
       const total = queueRef.current.length || 1;
       const progress = Math.round(((indexRef.current + 1) / total) * 100);
 

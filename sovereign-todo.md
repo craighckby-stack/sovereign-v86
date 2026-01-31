@@ -1,3 +1,4 @@
+<!-- NEXUS_EVO: J8WVR -->
 # Sovereign Project: Official Development Roadmap and Task Registry
 
 This document constitutes the official development roadmap and task registry for the Sovereign Project. It is systematically maintained and updated by the Sovereign v86 automation engine during continuous integration and maintenance cycles. Completion status is indicated by a checked box.

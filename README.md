@@ -1,31 +1,29 @@
-Sovereign v86
+# Sovereign v86: Autonomous Code Refactoring Agent
 
-Sovereign v86 is an autonomous code refactoring agent. It achieved its current state through 106 iterations of recursive self-improvement, with v86 selected for optimal performance. It is built using free-tier APIs and is MIT licensed.
+Sovereign v86 is an autonomous code refactoring agent. It achieved its current state through 106 iterations of recursive self-improvement, with v86 selected specifically for optimal performance. The agent is built using free-tier APIs and is released under the MIT license.
+
+---
 
 ## Prerequisites
 
-1.  **GitHub Repository:** Specify the URL of the target GitHub repository.
-2.  **GitHub Token:** A valid GitHub Personal Access Token (PAT) with necessary permissions for cloning and pushing.
-3.  **Gemini API Key:** An API key for the Gemini model.
+To operate Sovereign v86, the following three inputs are required:
+
+1.  **GitHub Repository URL:** The URL of the target repository.
+2.  **GitHub Token:** A valid Personal Access Token (PAT) with necessary permissions for cloning and pushing changes.
+3.  **Gemini API Key:** A valid API key for the Gemini model.
 
 ## Configuration and Usage
 
-### Required Inputs
-
-The agent requires the following inputs to operate:
-
-*   GitHub Repository URL
-*   GitHub Token
-*   Gemini API Key
-
 ### Model Selection
 
-**Recommendation:** Utilize the `gemini-lite` model for optimal cost efficiency and performance. Other models may introduce unnecessary overhead for standard refactoring tasks.
+**Recommendation:** Utilize the `gemini-lite` model. This model provides optimal cost efficiency and performance. Other models may introduce unnecessary overhead for standard refactoring tasks.
 
 ### Commit Strategy
 
-The agent commits changes directly to the `main` branch, overwriting the original code structure. **Use with extreme caution.**
+**Warning: Destructive Commit Strategy**
+
+The agent commits changes directly to the `main` branch, overwriting the original code structure. **Use with extreme caution.** It is highly recommended to run the agent against a dedicated feature branch or a fork.
 
 ### Exclusion List
 
-To prevent the agent from modifying specific files, append the `.txt` extension to their filenames. For example, `config.txt` will be ignored during processing.
+To prevent the agent from modifying specific files, append the `.txt` extension to their filenames. For example, a file named `config.txt` will be automatically ignored during processing.

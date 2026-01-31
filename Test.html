@@ -2,15 +2,14 @@ import sys
 from types import FrameType
 from typing import Any, Callable, Optional, Final
 
-# --- Configuration and State Management ---
+# --- Configuration ---
 
 # Define the name of the sensitive variable using typing.Final for immutability clarity.
 SENSITIVE_VARIABLE_NAME: Final[str] = 'my_secret_variable'
 
-# Global state to store the previous trace function for proper restoration (best practice).
-_ORIGINAL_TRACE_FUNCTION: Optional[Callable] = None
+# --- Trace Handler (Performance Critical) ---
 
-def _scrub_sensitive_variable_trace_handler(
+def _scrub_handler(
     frame: FrameType, 
     event: str, 
     arg: Any
@@ -18,10 +17,10 @@ def _scrub_sensitive_variable_trace_handler(
     """
     High-performance trace handler executed on every line/event.
 
-    This function is optimized for speed, performing a direct check and deletion
-    of the sensitive variable from the frame's local scope (f_locals).
+    Deletes the sensitive variable from the frame's local scope (f_locals) if present.
+    This function is optimized for speed in a high-frequency context.
     """
-    # Access locals directly for maximum performance in this high-frequency context.
+    # Access locals directly for maximum performance.
     f_locals = frame.f_locals
 
     # Optimized check and delete block.
@@ -29,34 +28,33 @@ def _scrub_sensitive_variable_trace_handler(
         del f_locals[SENSITIVE_VARIABLE_NAME]
 
     # Must return the function itself to continue tracing the next line/event.
-    return _scrub_sensitive_variable_trace_handler
+    return _scrub_handler
 
-def enable_sensitive_variable_scrubbing() -> None:
+# --- Context Manager (Readability and Best Practice) ---
+
+class SensitiveVariableScrubber:
     """
-    Activates the global system trace function, installing the scrubber handler.
+    A context manager for safely enabling and disabling system-wide variable scrubbing.
     
-    Stores the previously active trace function for safe restoration.
-    """
-    global _ORIGINAL_TRACE_FUNCTION
+    Ensures the original trace function is restored upon exit, adhering to RAII principles.
     
-    # Check if tracing is already active via this mechanism.
-    if _ORIGINAL_TRACE_FUNCTION is None:
-        _ORIGINAL_TRACE_FUNCTION = sys.gettrace()
-
-    # Apply the optimized trace handler.
-    sys.settrace(_scrub_sensitive_variable_trace_handler)
-
-def disable_sensitive_variable_scrubbing() -> None:
+    Usage:
+        with SensitiveVariableScrubber():
+            # Code where 'my_secret_variable' is automatically scrubbed
+            ...
     """
-    Restores the system trace function to the state it was in before scrubbing 
-    was enabled, ensuring proper cleanup of global state.
-    """
-    global _ORIGINAL_TRACE_FUNCTION
-    
-    if _ORIGINAL_TRACE_FUNCTION is not None:
-        sys.settrace(_ORIGINAL_TRACE_FUNCTION)
-        _ORIGINAL_TRACE_FUNCTION = None
+    def __init__(self):
+        self._original_trace_fn: Optional[Callable] = None
 
-# --- Execution ---
-# Apply the trace function globally, replicating the original file's immediate activation.
-enable_sensitive_variable_scrubbing()
+    def __enter__(self) -> None:
+        """Saves the current trace function and installs the scrubber handler."""
+        self._original_trace_fn = sys.gettrace()
+        
+        # Apply the optimized trace handler.
+        sys.settrace(_scrub_handler)
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Restores the system trace function to its original state."""
+        # Restore the saved trace function, even if it was None.
+        sys.settrace(self._original_trace_fn)
+        self._original_trace_fn = None

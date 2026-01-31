@@ -1,3 +1,4 @@
+<!-- NEXUS_EVO: GUTRGA -->
 # AI ENHANCER OPERATING MANUAL
 ## Sovereign v86 Autonomous Refactoring System
 

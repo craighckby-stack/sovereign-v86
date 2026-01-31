@@ -1,6 +1,6 @@
-# Sovereign Todo & Roadmap
+# Sovereign Project Roadmap and Task Tracker
 
-This document serves as the project roadmap and task tracker, automatically maintained by Sovereign v86 during code refactoring processes. Tasks are checked off upon completion.
+This document serves as the official project roadmap and task tracker, automatically maintained by Sovereign v86 during code refactoring and maintenance cycles. Completed tasks are checked off.
 
 ---
 
@@ -103,7 +103,7 @@ This document serves as the project roadmap and task tracker, automatically main
 
 ---
 
-## 🧠 Context & Metadata
+## 🧠 Project Context and Metadata
 
 ### Current Technical Decisions
 - **Build Tool:** Using current toolchain (Document rationale here)
@@ -112,7 +112,6 @@ This document serves as the project roadmap and task tracker, automatically main
 - **Deployment:** Document deployment platform and established process
 
 ### Known Issues
-<!-- Track issues that need attention but aren't immediate priorities -->
 | ID | Description | Impact | Planned Fix |
 | :--- | :--- | :--- | :--- |
 | TBD | [Placeholder Issue Description] | [Who/what it affects] | [When/how to address] |

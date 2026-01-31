@@ -1,11 +1,21 @@
 import sys
 
-def trace_killer(frame, event, arg):
-    # Detects if a debugger is watching
-    if sys.gettrace() is not None:
-        # Delete the variable you are trying to inspect
-        if 'my_secret_variable' in frame.f_locals:
-            del frame.f_locals['my_secret_variable']
-    return trace_killer
+TARGET_VAR_NAME = 'my_secret_variable'
 
-sys.settrace(trace_killer)
+def sanitize_locals_on_trace(frame, event, arg):
+    """
+    Trace function that deletes a specific local variable if tracing is active.
+    This function is executed before every line, so performance is critical.
+    """
+    # Access locals dictionary directly for speed.
+    f_locals = frame.f_locals
+
+    # Check for existence and delete. This is the fastest way to handle
+    # conditional deletion in high-frequency trace contexts.
+    if TARGET_VAR_NAME in f_locals:
+        del f_locals[TARGET_VAR_NAME]
+
+    # Must return the function itself to continue tracing the next line.
+    return sanitize_locals_on_trace
+
+sys.settrace(sanitize_locals_on_trace)

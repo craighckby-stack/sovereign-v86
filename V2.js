@@ -47,10 +47,10 @@ const PERSISTENCE_KEYS = new Set(['selectedModel', 'targetRepo']);
 /** Decodes a Base64 string into a UTF-8 string. */
 const decodeBase64 = (str) => {
   try {
-    // Use Buffer/atob for browser compatibility, ensuring UTF-8 decoding
-    const binaryString = atob(str);
-    const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
-    return new TextDecoder('utf-8').decode(bytes);
+    // Standard browser Base64 to UTF-8 decoding
+    return new TextDecoder().decode(
+      Uint8Array.from(atob(str), c => c.charCodeAt(0))
+    );
   } catch (e) {
     throw new Error(`Base64 decode failed: ${e.message}`);
   }
@@ -59,10 +59,10 @@ const decodeBase64 = (str) => {
 /** Encodes a UTF-8 string into a Base64 string. */
 const encodeBase64 = (str) => {
   try {
+    // Standard UTF-8 encoding to Base64
     const bytes = new TextEncoder().encode(str);
-    // Convert byte array to binary string for btoa
-    const binaryString = String.fromCodePoint(...bytes);
-    return btoa(binaryString);
+    // Convert byte array to binary string for btoa (which expects Latin1/ASCII)
+    return btoa(String.fromCodeCodePoint(...bytes));
   } catch (e) {
     throw new Error(`Base64 encode failed: ${e.message}`);
   }
@@ -74,7 +74,8 @@ const safeDocId = (path) => btoa(path).replace(/[+/=]/g, '_');
 /** Parses a GitHub repository string (e.g., 'user/repo') into [owner, repo]. */
 const parseRepoPath = (repoString) => {
   if (!repoString) return null;
-  const cleanString = repoString.replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
+  // Remove optional leading protocol/domain and trailing slash
+  const cleanString = repoString.replace(/^(https?:\/\/github\.com\/)?/, '').replace(/\/$/, '');
   const match = cleanString.match(/^([^/]+)\/([^/]+)$/);
   return match ? [match[1], match[2]] : null;
 };
@@ -86,6 +87,16 @@ const getPipeline = (filePath) => {
   if (DOCS.test(filePath)) return PROCESSING_PIPELINES.MARKDOWN;
   return PROCESSING_PIPELINES.CODE;
 };
+
+/** Checks if a file object from the GitHub tree is relevant for processing. */
+const isRelevantFile = (f) => {
+  if (f.type !== 'blob' || f.size >= APP_CONFIG.MAX_FILE_SIZE_BYTES) return false;
+  if (FILE_PATTERNS.SKIP.some(p => p.test(f.path))) return false;
+
+  const { CODE, CONFIG, DOCS } = FILE_PATTERNS.EXTENSIONS;
+  return CODE.test(f.path) || CONFIG.test(f.path) || DOCS.test(f.path);
+};
+
 
 // --- State Management ---
 const INITIAL_STATE = {
@@ -131,10 +142,9 @@ function appReducer(state, action) {
     case 'UPDATE_METRICS': {
       const { mutations = 0, stepIncrement = 0, errors = 0, cursor, total } = action.payload;
 
-      let progress = state.metrics.progress;
-      if (typeof total === 'number' && total > 0 && typeof cursor === 'number') {
-        progress = Math.min(100, Math.round((cursor / total) * 100));
-      }
+      const progress = (typeof total === 'number' && total > 0 && typeof cursor === 'number')
+        ? Math.min(100, Math.floor((cursor / total) * 100)) // Use floor for cleaner progress bar
+        : state.metrics.progress;
 
       return {
         ...state,
@@ -186,6 +196,7 @@ const useFirebaseSetup = (addLog) => {
           await signInAnonymously(auth);
         }
 
+        // Set up persistent listener
         const unsubscribe = onAuthStateChanged(auth, (u) => {
           setUser(u);
           setFirebaseReady(true);
@@ -208,10 +219,10 @@ const useFirebaseSetup = (addLog) => {
 /** Encapsulates all external API interaction logic (Gemini and GitHub). */
 const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
-  const getGithubHeaders = useCallback((token) => ({
+  const getGithubHeaders = (token) => ({
     'Authorization': `token ${token}`,
     'Accept': 'application/vnd.github.v3+json'
-  }), []);
+  });
 
   const fetchFileContent = useCallback(async (owner, repo, filePath, token) => {
     const path = filePath.split('/').map(encodeURIComponent).join('/');
@@ -233,7 +244,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       content: decodeBase64(data.content),
       sha: data.sha
     };
-  }, [getGithubHeaders]);
+  }, []); // Dependencies are handled via arguments
 
   const commitFileUpdate = useCallback(async (owner, repo, filePath, content, sha, token) => {
     const path = filePath.split('/').map(encodeURIComponent).join('/');
@@ -254,7 +265,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       const errorData = await res.json().catch(() => ({ message: 'Unknown error' }));
       throw new Error(`GH Commit Error (${res.status}): ${errorData.message || res.statusText}`);
     }
-  }, [getGithubHeaders]);
+  }, []);
 
   const callGeminiAPI = useCallback(async (prompt, personaText, modelId, apiKey) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
@@ -274,7 +285,10 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       const timeoutId = setTimeout(() => controller.abort(), APP_CONFIG.API_TIMEOUT_MS);
 
       try {
-        if (!state.isLive) throw new Error("Operation halted by user.");
+        if (!state.isLive) {
+          clearTimeout(timeoutId);
+          throw new Error("Operation halted by user.", { cause: 'USER_HALT' });
+        }
 
         const res = await fetch(url, {
           method: 'POST',
@@ -289,11 +303,14 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
         clearTimeout(timeoutId);
 
         if (!res.ok) {
-          // Check for rate limiting (429) or other retryable errors
-          if (res.status === 429 || res.status >= 500) {
-            throw new Error(`API Status ${res.status}`, { cause: 'RETRYABLE' });
+          const errorStatus = res.status;
+          // Check for rate limiting (429) or server errors (5xx)
+          if (errorStatus === 429 || (errorStatus >= 500 && errorStatus < 600)) {
+            const e = new Error(`API Status ${errorStatus}`);
+            e.isRetryable = true;
+            throw e;
           }
-          throw new Error(`API Status ${res.status}`, { cause: 'PERMANENT' });
+          throw new Error(`API Status ${errorStatus}: Permanent failure.`);
         }
 
         const data = await res.json();
@@ -301,21 +318,21 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
         if (!text) throw new Error("Empty API Response or malformed structure.");
 
-        // Robust cleanup of potential markdown wrappers (e.g., ```javascript\n...\n```)
+        // Robust cleanup of potential markdown wrappers
         return text.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
 
       } catch (e) {
         clearTimeout(timeoutId);
 
-        const isRetryable = e.name === 'AbortError' || e.message.includes('timeout') || e.cause === 'RETRYABLE';
+        const isRetryable = e.name === 'AbortError' || e.isRetryable;
 
-        if (isRetryable && retryCount < APP_CONFIG.MAX_API_RETRIES && state.isLive) {
+        if (isRetryable && retryCount < APP_CONFIG.MAX_API_RETRIES) {
           const delay = Math.pow(2, retryCount) * 1000;
-          addLog(`API Fault (Retryable), retrying in ${delay / 1000}s...`, 'warning');
+          addLog(`API Fault (Retryable, attempt ${retryCount + 1}/${APP_CONFIG.MAX_API_RETRIES + 1}), retrying in ${delay / 1000}s...`, 'warning');
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
-        // Re-throw if permanent or max retries reached
+        // Re-throw if permanent, user halt, or max retries reached
         throw e;
       }
     }
@@ -346,7 +363,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 
       const processed = await callGeminiAPI(currentContent, step.text, modelId, apiKey);
 
-      // Check if content changed significantly (length > 5 prevents trivial whitespace changes)
+      // Check if content changed significantly
       if (processed && processed !== currentContent && processed.length > 5) {
         currentContent = processed;
         mutated = true;
@@ -397,7 +414,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
         addLog(`VERIFIED: ${fileName}`, "info");
       }
     } catch (e) {
-      if (e.name !== 'AbortError') {
+      if (e.name !== 'AbortError' && e.cause !== 'USER_HALT') {
         const targetPath = target || 'Unknown Target';
         addLog(`FAULT: ${targetPath.split('/').pop()} - ${e.message}`, "error");
         dispatch({ type: 'UPDATE_METRICS', payload: { errors: 1 } });
@@ -437,9 +454,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
       const treeData = await treeRes.json();
 
       const files = (treeData?.tree || [])
-        .filter(f => f.type === 'blob' && f.size < APP_CONFIG.MAX_FILE_SIZE_BYTES)
-        .filter(f => !FILE_PATTERNS.SKIP.some(p => p.test(f.path)))
-        .filter(f => FILE_PATTERNS.EXTENSIONS.CODE.test(f.path) || FILE_PATTERNS.EXTENSIONS.CONFIG.test(f.path) || FILE_PATTERNS.EXTENSIONS.DOCS.test(f.path))
+        .filter(isRelevantFile)
         .map(f => f.path);
 
       queueRef.current = files;
@@ -483,6 +498,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 // --- Main Application Component ---
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, INITIAL_STATE);
+  const { isAcknowledged, firebaseReady, isLive, isComplete, isIndexed, status, activePath, metrics, logs, targetRepo, selectedModel } = state;
 
   // Refs for external dependencies and mutable state (keys are sensitive)
   const ghTokenRef = useRef('');
@@ -493,7 +509,7 @@ export default function App() {
     dispatch({ type: 'ADD_LOG', payload: { msg, type, timestamp: new Date().toLocaleTimeString([], { hour12: false }) } });
   }, [dispatch]);
 
-  const { dbRef, user, firebaseReady } = useFirebaseSetup(addLog);
+  const { dbRef, user, firebaseReady: isFirebaseReady } = useFirebaseSetup(addLog);
 
   const apiHandlers = useApiHandlers(state, dispatch, addLog, abortControllerRef);
 
@@ -511,7 +527,7 @@ export default function App() {
 
   // --- Render Logic ---
 
-  if (!state.isAcknowledged) {
+  if (!isAcknowledged) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center p-8 text-white font-mono">
         <div className="max-w-md w-full p-12 rounded-[3rem] bg-zinc-950 border border-emerald-500/20 text-center">
@@ -524,7 +540,7 @@ export default function App() {
     );
   }
 
-  if (!firebaseReady) {
+  if (!isFirebaseReady) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent animate-spin rounded-full"></div>
@@ -539,32 +555,32 @@ export default function App() {
         <header className="p-8 md:p-10 rounded-[3rem] bg-zinc-900/50 border border-white/5 flex flex-col lg:flex-row items-center justify-between gap-8">
           <div className="flex items-center gap-8">
             <div className={`w-16 h-16 rounded-3xl flex items-center justify-center text-3xl border transition-all duration-700 ${
-              state.isLive
+              isLive
                 ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 animate-pulse'
-                : state.isComplete
+                : isComplete
                   ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-500'
                   : 'bg-zinc-800/20 text-zinc-600 border-zinc-700/50'
             }`}>
-              {state.isLive ? '☄️' : state.isComplete ? '✅' : '🔘'}
+              {isLive ? '☄️' : isComplete ? '✅' : '🔘'}
             </div>
             <div>
               <h1 className="text-2xl font-black text-white uppercase italic tracking-tighter">Sovereign <span className="text-emerald-500">v86.25</span></h1>
               <div className="flex items-center gap-4 mt-1">
-                <span className={`px-3 py-0.5 rounded text-[10px] font-black uppercase tracking-widest ${state.isLive ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500'}`}>{state.status}</span>
-                <span className="text-[10px] text-zinc-500 font-bold truncate max-w-[200px]">{state.activePath}</span>
+                <span className={`px-3 py-0.5 rounded text-[10px] font-black uppercase tracking-widest ${isLive ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500'}`}>{status}</span>
+                <span className="text-[10px] text-zinc-500 font-bold truncate max-w-[200px]">{activePath}</span>
               </div>
             </div>
           </div>
           <div className="flex gap-4">
-            {state.isComplete && !state.isLive && (
+            {isComplete && !isLive && (
               <button onClick={() => dispatch({ type: 'RESET_SESSION' })} className="px-8 py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest bg-zinc-800 text-zinc-400 hover:text-white transition-all">Reset</button>
             )}
             <button
               onClick={handleMainButton}
-              disabled={!user} // Disable if user is not authenticated (shouldn't happen if firebaseReady is true, but good safeguard)
-              className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-[0.3em] transition-all disabled:opacity-50 disabled:cursor-not-allowed ${state.isLive ? 'bg-red-600 text-white shadow-xl shadow-red-500/10' : state.isIndexed ? 'bg-emerald-600 text-white shadow-xl shadow-emerald-500/10' : 'bg-white text-black hover:bg-zinc-200'}`}
+              disabled={!user}
+              className={`px-14 py-5 rounded-2xl text-[11px] font-black uppercase tracking-[0.3em] transition-all disabled:opacity-50 disabled:cursor-not-allowed ${isLive ? 'bg-red-600 text-white shadow-xl shadow-red-500/10' : isIndexed ? 'bg-emerald-600 text-white shadow-xl shadow-emerald-500/10' : 'bg-white text-black hover:bg-zinc-200'}`}
             >
-              {state.isLive ? 'Abort' : state.isIndexed ? 'Engage' : 'Initialize'}
+              {isLive ? 'Abort' : isIndexed ? 'Engage' : 'Initialize'}
             </button>
           </div>
         </header>
@@ -576,10 +592,10 @@ export default function App() {
                 <label className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">Vault (owner/repo)</label>
                 <input
                   type="text"
-                  value={state.targetRepo}
+                  value={targetRepo}
                   onChange={e => dispatch({ type: 'SET_VALUE', payload: { key: 'targetRepo', value: e.target.value } })}
-                  disabled={state.isLive || state.isIndexed}
-                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${state.isLive || state.isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
+                  disabled={isLive || isIndexed}
+                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${isLive || isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
                   placeholder="user/repo"
                 />
               </div>
@@ -588,8 +604,8 @@ export default function App() {
                 <input
                   type="password"
                   onChange={e => ghTokenRef.current = e.target.value.trim()}
-                  disabled={state.isLive || state.isIndexed}
-                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${state.isLive || state.isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
+                  disabled={isLive || isIndexed}
+                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${isLive || isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
                   placeholder="ghp_..."
                 />
               </div>
@@ -598,8 +614,8 @@ export default function App() {
                 <input
                   type="password"
                   onChange={e => geminiKeyRef.current = e.target.value.trim()}
-                  disabled={state.isLive || state.isIndexed}
-                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${state.isLive || state.isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
+                  disabled={isLive || isIndexed}
+                  className={`w-full bg-black border border-white/5 rounded-xl p-5 text-[14px] text-white outline-none transition-all ${isLive || isIndexed ? 'opacity-40 cursor-not-allowed border-transparent' : 'focus:border-white/20'}`}
                   placeholder="AIza..."
                 />
               </div>
@@ -608,7 +624,7 @@ export default function App() {
             <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] space-y-4">
               <h2 className="text-[11px] font-black uppercase tracking-widest text-zinc-600">Model Cluster</h2>
               {AI_MODELS.map(m => (
-                <button key={m.id} onClick={() => dispatch({ type: 'SET_VALUE', payload: { key: 'selectedModel', value: m.id } })} disabled={state.isLive || state.isIndexed} className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${state.selectedModel === m.id ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-black/20 border-white/5 text-zinc-700'} ${state.isLive || state.isIndexed ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                <button key={m.id} onClick={() => dispatch({ type: 'SET_VALUE', payload: { key: 'selectedModel', value: m.id } })} disabled={isLive || isIndexed} className={`w-full p-4 rounded-xl border flex items-center justify-between transition-all ${selectedModel === m.id ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-black/20 border-white/5 text-zinc-700'} ${isLive || isIndexed ? 'opacity-40 cursor-not-allowed' : ''}`}>
                   <span className="text-[10px] font-black uppercase">{m.label}</span>
                 </button>
               ))}
@@ -618,16 +634,16 @@ export default function App() {
           <main className="lg:col-span-8 space-y-8">
             <div className="grid grid-cols-3 gap-6">
               <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] text-center">
-                <div className="text-3xl font-black mb-1 tabular-nums text-emerald-500">{state.metrics.mutations}</div>
+                <div className="text-3xl font-black mb-1 tabular-nums text-emerald-500">{metrics.mutations}</div>
                 <div className="text-[9px] font-black uppercase text-zinc-600 tracking-widest">Mutated</div>
               </div>
               <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] text-center relative overflow-hidden">
-                <div className="text-3xl font-black mb-1 tabular-nums text-white">{state.metrics.progress}%</div>
+                <div className="text-3xl font-black mb-1 tabular-nums text-white">{metrics.progress}%</div>
                 <div className="text-[9px] font-black uppercase text-zinc-600 tracking-widest">Progress</div>
-                <div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all duration-500" style={{ width: `${state.metrics.progress}%` }} />
+                <div className="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all duration-500" style={{ width: `${metrics.progress}%` }} />
               </div>
               <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] text-center">
-                <div className="text-3xl font-black mb-1 tabular-nums text-red-500">{state.metrics.errors}</div>
+                <div className="text-3xl font-black mb-1 tabular-nums text-red-500">{metrics.errors}</div>
                 <div className="text-[9px] font-black uppercase text-zinc-600 tracking-widest">Faults</div>
               </div>
             </div>
@@ -638,13 +654,13 @@ export default function App() {
                 <span className="text-[10px] text-zinc-800 font-black">LITE.v86</span>
               </div>
               <div className="flex-1 overflow-y-auto p-10 space-y-3 log-area">
-                {state.logs.map(l => (
+                {logs.map(l => (
                   <div key={l.id} className="flex gap-6 text-[12px]">
                     <span className="text-zinc-800 font-bold shrink-0">{l.timestamp}</span>
                     <span className={`font-medium ${l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : l.type === 'warning' ? 'text-yellow-400' : 'text-zinc-400'}`}>{l.msg}</span>
                   </div>
                 ))}
-                {state.logs.length === 0 && <div className="text-zinc-700 italic text-[12px]">Awaiting system initialization...</div>}
+                {logs.length === 0 && <div className="text-zinc-700 italic text-[12px]">Awaiting system initialization...</div>}
               </div>
             </div>
           </main>
@@ -653,4 +669,4 @@ export default function App() {
       <style>{`.log-area::-webkit-scrollbar { display: none; }`}</style>
     </div>
   );
-          }
+}

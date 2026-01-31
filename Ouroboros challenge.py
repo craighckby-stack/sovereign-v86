@@ -1,15 +1,16 @@
-from typing import List, Callable, Dict, Any, Final, TypedDict, NamedTuple
+from typing import List, Callable, Final, TypedDict, NamedTuple, ClassVar
 from dataclasses import dataclass
 import sys
 
 # --- Configuration & Constants ---
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Config:
     """Centralized configuration for the Ouroboros system."""
-    MAX_CYCLES: Final[int] = 5  # Maximum number of full pipeline cycles to attempt
-    START_LANG: Final[str] = "Ruby"
-    END_LANG: Final[str] = "Ruby" # Defines the required final language for closure
+    # Use ClassVar[Final] for true static constants within the configuration object
+    MAX_CYCLES: ClassVar[Final[int]] = 5  # Maximum number of full pipeline cycles to attempt
+    START_LANG: ClassVar[Final[str]] = "Ruby"
+    END_LANG: ClassVar[Final[str]] = "Ruby" # Defines the required final language for closure
 
 # --- Type Definitions ---
 
@@ -27,14 +28,18 @@ class HistoryEntry(TypedDict):
     output_lang: str
     code_length: int
 
-# Structure for the final execution results.
-class ExecutionResult(TypedDict):
+# Structure for the final execution results, using NamedTuple for immutable, attribute-based access.
+class ExecutionResult(NamedTuple):
     final_code: str
     cycles_run: int
     final_language: str
     transformation_history: List[HistoryEntry]
     initial_code_snippet: str
     successful_closure: bool
+
+# Type aliases for clarity
+PipelineChain = List[TransformationStep]
+History = List[HistoryEntry]
 
 # --- Helper Function ---
 
@@ -55,17 +60,17 @@ def _extract_first_line(code: str) -> str:
 def generate_python_from_ruby(code: str) -> str:
     """Generates Python code from Ruby source fragment."""
     snippet = _extract_first_line(code)
-    return f"# Python generated from Ruby: '{snippet}'..."
+    return f"# Python generated from Ruby: '{snippet}'\n# ... rest of translation"
 
 def generate_java_from_python(code: str) -> str:
     """Generates Java code from Python source fragment."""
     snippet = _extract_first_line(code)
-    return f"// Java public class generated from Python: '{snippet}'..."
+    return f"// Java public class generated from Python: '{snippet}'\n// ... rest of translation"
 
 def closing_transformer(code: str) -> str:
     """Regenerates the starting language (Ruby) from the previous step (e.g., Java)."""
     snippet = _extract_first_line(code)
-    return f"# Ruby code successfully regenerated. Traceback: {snippet}..."
+    return f"# Ruby code successfully regenerated. Traceback: {snippet}\n# ... final output"
 
 
 # --- Ouroboros System Core ---
@@ -76,15 +81,15 @@ class TransformationPipeline:
     designed to form a closed cycle (Ouroboros).
     """
     
-    def __init__(self, transformations: List[TransformationStep]):
+    def __init__(self, transformations: PipelineChain):
         """
         Initializes the pipeline chain and validates its structural integrity.
         """
         if not transformations:
             raise ValueError("The transformation sequence cannot be empty.")
         
-        self.chain: List[TransformationStep] = transformations
-        self.chain_length = len(transformations)
+        self.chain: Final[PipelineChain] = transformations
+        self.chain_length: Final[int] = len(transformations)
         
         self._validate_chain_integrity()
         self._validate_ouroboros_closure()
@@ -103,13 +108,13 @@ class TransformationPipeline:
                 f"but step 1 requires '{self.chain[0].input_lang}'."
             )
 
-        # 2. Validate internal step transitions
-        for i, current_step in enumerate(self.chain[:-1]):
-            next_step = self.chain[i+1]
+        # 2. Validate internal step transitions using zip for cleaner iteration
+        for i, (current_step, next_step) in enumerate(zip(self.chain[:-1], self.chain[1:])):
+            step_num = i + 1
             
             if current_step.output_lang != next_step.input_lang:
                 raise RuntimeError(
-                    f"Chain discontinuity detected at step {i+1} -> {i+2}: "
+                    f"Chain discontinuity detected between step {step_num} and {step_num + 1}: "
                     f"Output language '{current_step.output_lang}' mismatches "
                     f"next input language '{next_step.input_lang}'."
                 )
@@ -122,7 +127,7 @@ class TransformationPipeline:
         if end_output_lang != start_lang:
              raise RuntimeError(
                 f"Ouroboros closure validation failed: Chain ends with '{end_output_lang}' "
-                f"but the starting language is '{start_lang}'."
+                f"but the required starting/closing language is '{start_lang}'."
             )
 
     def execute_generation(self, initial_code: str, max_cycles: int = Config.MAX_CYCLES) -> ExecutionResult:
@@ -131,7 +136,7 @@ class TransformationPipeline:
         """
         current_code = initial_code
         current_language = Config.START_LANG
-        history: List[HistoryEntry] = []
+        history: History = []
         cycles_run = 0 
 
         print(f"--- Transformation Engine Initialized ---")
@@ -145,7 +150,6 @@ class TransformationPipeline:
                 
                 # State Check: Ensure the current language matches the step's expected input
                 if step.input_lang != current_language:
-                     # This indicates a severe internal logic failure, not a configuration error
                      raise SystemError(
                          f"FATAL: Internal pipeline state corrupted. Expected input language '{current_language}', "
                          f"but step {step_in_cycle} requires '{step.input_lang}' (Cycle {cycle_num})."
@@ -180,7 +184,7 @@ class TransformationPipeline:
         if not successful_closure:
             print(f"\nWARNING: Max cycles ({max_cycles}) reached without closure. Final language is {current_language}.")
 
-        # Return structured results
+        # Return structured results using the NamedTuple constructor
         return ExecutionResult(
             final_code=current_code,
             cycles_run=cycles_run,
@@ -195,7 +199,7 @@ class TransformationPipeline:
 if __name__ == "__main__":
     
     # Define the explicit chain required to form the Ouroboros (Ruby -> Python -> Java -> Ruby)
-    pipeline_definition: List[TransformationStep] = [
+    pipeline_definition: PipelineChain = [
         TransformationStep(Config.START_LANG, "Python", generate_python_from_ruby),
         TransformationStep("Python", "Java", generate_java_from_python),
         TransformationStep("Java", Config.END_LANG, closing_transformer),
@@ -212,22 +216,24 @@ end
         # 1. Initialize the pipeline engine
         engine = TransformationPipeline(pipeline_definition)
         
-        # 2. Execute the chain, running exactly one cycle to confirm closure.
+        # 2. Execute the chain, running exactly one cycle for demonstration.
         results: ExecutionResult = engine.execute_generation(initial_ruby_payload, max_cycles=1)
 
         print("\n" + "="*50)
         print("--- FINAL EXECUTION SUMMARY ---")
         print(f"Start Language/Goal: {Config.START_LANG}")
         print(f"Pipeline Steps: {engine.chain_length}")
-        print(f"Start Code Snippet: {results['initial_code_snippet']}")
-        print(f"Cycles Run: {results['cycles_run']}")
-        print(f"Closure Successful: {results['successful_closure']}")
-        print(f"Total Transformations Executed: {len(results['transformation_history'])}")
-        print(f"Final Language: {results['final_language']}")
+        # Accessing results using dot notation (due to NamedTuple)
+        print(f"Start Code Snippet: {results.initial_code_snippet}")
+        print(f"Cycles Run: {results.cycles_run}")
+        print(f"Closure Successful: {results.successful_closure}")
+        print(f"Total Transformations Executed: {len(results.transformation_history)}")
+        print(f"Final Language: {results.final_language}")
         print("="*50)
         print("\n--- Final Output Code ---")
-        print(results['final_code'])
+        print(results.final_code)
 
     except (ValueError, RuntimeError, SystemError) as e:
+        # Use sys.stderr for critical errors
         print(f"\n[FATAL SYSTEM ERROR]: The Ouroboros chain failed: {e}", file=sys.stderr)
         sys.exit(1)

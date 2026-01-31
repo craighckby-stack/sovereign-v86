@@ -1,8 +1,8 @@
 """
 Polyglot Core Component (Python Implementation)
 
-This module implements the core language-specific string component required by a
-polyglot execution framework, adhering strictly to modern Python best practices.
+Implements the core language-specific string component required by a
+polyglot execution framework.
 """
 
 __author__ = "Senior Software Architect"
@@ -20,10 +20,10 @@ def get_core_string() -> str:
     """
     Retrieves the definitive language-specific string component.
 
-    This function provides an abstraction layer over the core component value.
+    Provides an abstraction layer over the core component value.
 
     Returns:
-        The core string output component.
+        str: The core string output component ("Hello").
     """
     return CORE_STRING_VALUE
 

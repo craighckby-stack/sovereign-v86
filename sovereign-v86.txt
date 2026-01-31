@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { 
-  getFirestore, collection, writeBatch, query, onSnapshot, 
+import {
+  getFirestore, collection, writeBatch, query, onSnapshot,
   serverTimestamp, limit, doc
 } from 'firebase/firestore';
-import { 
-  getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged 
+import {
+  getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged
 } from 'firebase/auth';
 
 /**
@@ -38,7 +38,7 @@ const initialState = {
   status: 'IDLE',
   activePath: 'Ready',
   selectedModel: localStorage.getItem('emg_active_model_v86') || CORE_CONFIG.MODELS[0].id,
-  modelHealth: JSON.parse(localStorage.getItem('emg_health_v86')) || {}, 
+  modelHealth: JSON.parse(localStorage.getItem('emg_health_v86')) || {},
   targetRepo: localStorage.getItem('emg_repo_v86') || '',
   logs: [],
   insights: [],
@@ -48,21 +48,21 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
-    case 'SET_VAL': 
+    case 'SET_VAL':
       if (action.key === 'targetRepo') localStorage.setItem('emg_repo_v86', action.value);
       if (action.key === 'selectedModel') localStorage.setItem('emg_active_model_v86', action.value);
       return { ...state, [action.key]: action.value };
     case 'ACKNOWLEDGE': return { ...state, isAcknowledged: true };
-    case 'TOGGLE': 
+    case 'TOGGLE':
       const newLive = !state.isLive;
       return { ...state, isLive: newLive, status: newLive ? 'INITIALIZING' : 'IDLE', activePath: 'Ready' };
-    case 'LOG': 
+    case 'LOG':
       return { ...state, logs: [{ ...action.payload, id: Date.now() + Math.random() }, ...state.logs].slice(0, 40) };
-    case 'UPDATE_METRICS': 
+    case 'UPDATE_METRICS':
       return { ...state, metrics: { ...state.metrics, ...action.payload } };
     case 'SET_BUFFER':
       return { ...state, bufferCount: action.value };
-    case 'SET_INSIGHTS': 
+    case 'SET_INSIGHTS':
       return { ...state, insights: action.payload };
     case 'SET_STATUS':
       return { ...state, status: action.value, activePath: action.path || state.activePath };
@@ -82,16 +82,16 @@ export default function App() {
   const isBusy = useRef(false);
   const queueRef = useRef([]);
   const indexRef = useRef(parseInt(localStorage.getItem('emg_cursor_v86'), 10) || 0);
-  const mutationBuffer = useRef([]); 
+  const mutationBuffer = useRef([]);
   const metricsRef = useRef(state.metrics);
 
-  const pushLog = (msg, type = 'info') => dispatch({ 
-    type: 'LOG', 
-    payload: { 
-      msg, 
-      type, 
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) 
-    } 
+  const pushLog = (msg, type = 'info') => dispatch({
+    type: 'LOG',
+    payload: {
+      msg,
+      type,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    }
   });
 
   // Keep metrics ref in sync for closure safety in the loop
@@ -123,7 +123,7 @@ export default function App() {
         .sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
       dispatch({ type: 'SET_INSIGHTS', payload: data });
     }, (err) => pushLog("Cloud Sync error: " + err.code, "error"));
-    
+
     return () => unsubscribe();
   }, [user]);
 
@@ -134,18 +134,18 @@ export default function App() {
       const batch = writeBatch(db);
       mutationBuffer.current.forEach(item => {
         const ref = doc(collection(db, 'artifacts', CORE_CONFIG.APP_ID, 'users', user.uid, 'insights'));
-        batch.set(ref, { 
-          filePath: item.filePath, 
-          model: state.selectedModel, 
-          timestamp: serverTimestamp() 
+        batch.set(ref, {
+          filePath: item.filePath,
+          model: state.selectedModel,
+          timestamp: serverTimestamp()
         });
       });
       await batch.commit();
       pushLog(`Persisted ${mutationBuffer.current.length} items to vault`, "success");
       mutationBuffer.current = [];
       dispatch({ type: 'SET_BUFFER', value: 0 });
-    } catch (e) { 
-      pushLog("Vault commit failed", "error"); 
+    } catch (e) {
+      pushLog("Vault commit failed", "error");
     }
   };
 
@@ -155,7 +155,7 @@ export default function App() {
     try {
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(id);
-      
+
       if (res.status === 429) {
         const resetAt = Date.now() + 60000;
         dispatch({ type: 'SET_MODEL_BLOCK', modelId: state.selectedModel, blocked: true, resetAt });
@@ -174,7 +174,7 @@ export default function App() {
 
   const runCycle = useCallback(async () => {
     if (!state.isLive || isBusy.current || !user) return;
-    
+
     // Safety check for model blocking
     if (state.modelHealth[state.selectedModel]?.isBlocked) {
       const nextAvailable = CORE_CONFIG.MODELS.find(m => !state.modelHealth[m.id]?.isBlocked);
@@ -197,7 +197,7 @@ export default function App() {
       const repo = state.targetRepo.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
       const ghToken = ghTokenRef.current.trim();
       const geminiKey = geminiKeyRef.current.trim();
-      
+
       if (!repo.includes('/') || !ghToken || !geminiKey) throw new Error("Credentials Missing");
       const headers = { 'Authorization': `token ${ghToken}`, 'Accept': 'application/vnd.github.v3+json' };
 
@@ -214,16 +214,16 @@ export default function App() {
       }
 
       currentPath = queueRef.current[indexRef.current];
-      if (!currentPath) { 
+      if (!currentPath) {
         pushLog("Queue Exhausted", "success");
-        dispatch({ type: 'TOGGLE' }); 
-        return; 
+        dispatch({ type: 'TOGGLE' });
+        return;
       }
 
       dispatch({ type: 'SET_STATUS', value: 'ANALYZING', path: currentPath });
       const fRes = await fetchWithRetry(`https://api.github.com/repos/${repo}/contents/${currentPath}`, { headers });
       const fData = await fRes.json();
-      
+
       const b64ToUtf8 = (str) => decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
       const utf8ToB64 = (str) => btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (m, p) => String.fromCharCode('0x' + p)));
 
@@ -235,7 +235,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: `Act as a senior software architect. Refactor and optimize this file for clarity, performance, and best practices. Return only the updated source code block without any markdown formatting.\n\nFILE: ${currentPath}\nCONTENT:\n${raw}` }] }] })
       });
-      
+
       const aiData = await aiRes.json();
       const optimized = aiData?.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
 
@@ -246,13 +246,13 @@ export default function App() {
         const putRes = await fetchWithRetry(`https://api.github.com/repos/${repo}/contents/${currentPath}`, {
           method: 'PUT',
           headers,
-          body: JSON.stringify({ 
-            message: `[Sovereign v86] Optimized ${currentPath}`, 
-            content: utf8ToB64(optimized), 
-            sha: fData.sha 
+          body: JSON.stringify({
+            message: `[Sovereign v86] Optimized ${currentPath}`,
+            content: utf8ToB64(optimized),
+            sha: fData.sha
           })
         });
-        
+
         if (putRes.ok) {
           outcome = 'MUTATE';
           pushLog(`Optimized ${currentPath}`, "success");
@@ -272,15 +272,15 @@ export default function App() {
     } finally {
       const total = queueRef.current.length || 1;
       const progress = Math.round(((indexRef.current + 1) / total) * 100);
-      
-      dispatch({ type: 'UPDATE_METRICS', payload: { 
+
+      dispatch({ type: 'UPDATE_METRICS', payload: {
         progress: Math.min(progress, 100),
         mutations: metricsRef.current.mutations + (outcome === 'MUTATE' ? 1 : 0),
         skipped: metricsRef.current.skipped + (outcome === 'SKIP' ? 1 : 0),
         errors: metricsRef.current.errors + (outcome === 'ERROR' ? 1 : 0),
         latency: Math.round(performance.now() - startTime)
       }});
-      
+
       indexRef.current++;
       localStorage.setItem('emg_cursor_v86', indexRef.current.toString());
       isBusy.current = false;
@@ -289,9 +289,9 @@ export default function App() {
 
   useEffect(() => {
     let t;
-    if (state.isLive) { 
-      runCycle(); 
-      t = setInterval(runCycle, CORE_CONFIG.CYCLE_INTERVAL); 
+    if (state.isLive) {
+      runCycle();
+      t = setInterval(runCycle, CORE_CONFIG.CYCLE_INTERVAL);
     }
     return () => clearInterval(t);
   }, [state.isLive, runCycle]);
@@ -308,8 +308,8 @@ export default function App() {
           <div className="text-6xl mb-8 animate-bounce">🛰️</div>
           <h1 className="text-4xl font-black italic mb-3 uppercase tracking-tighter">Sovereign <span className="text-emerald-500">v86</span></h1>
           <p className="text-[10px] text-zinc-400 uppercase tracking-[0.4em] mb-12 font-bold opacity-70">Production Grade Code Automator</p>
-          <button 
-            onClick={() => dispatch({ type: 'ACKNOWLEDGE' })} 
+          <button
+            onClick={() => dispatch({ type: 'ACKNOWLEDGE' })}
             className="w-full py-5 bg-emerald-600 rounded-2xl font-black uppercase text-xs tracking-[0.2em] shadow-2xl shadow-emerald-500/20 active:scale-95 transition-all hover:bg-emerald-500"
           >
             Enter Command Center
@@ -325,13 +325,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#020202] text-zinc-400 p-4 md:p-8 lg:p-12 font-sans selection:bg-emerald-500/30 overflow-x-hidden">
       <div className="max-w-7xl mx-auto space-y-6 md:space-y-10">
-        
+
         {/* Glass Header */}
         <header className={`p-8 md:p-12 rounded-[2.5rem] md:rounded-[4rem] transition-all duration-700 bg-zinc-900/20 border-2 flex flex-col lg:flex-row items-center justify-between gap-8 relative overflow-hidden backdrop-blur-3xl ${currentBlocked ? 'border-red-600/30 shadow-red-900/10 shadow-2xl' : 'border-white/5'}`}>
           {state.isLive && (
             <div className={`absolute top-0 left-0 w-full h-[1px] animate-[scan_3s_linear_infinite] ${currentBlocked ? 'bg-red-600' : 'bg-emerald-500'}`} />
           )}
-          
+
           <div className="flex items-center gap-6 md:gap-10 w-full lg:w-auto">
             <div className={`w-16 h-16 md:w-20 md:h-20 rounded-[2rem] flex items-center justify-center text-3xl md:text-4xl border-2 transition-all shrink-0 ${currentBlocked ? 'bg-red-600/10 text-red-500 border-red-600/30' : state.isLive ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'bg-zinc-800/20 text-white opacity-50 border-white/5'}`}>
               {currentBlocked ? '⚠️' : state.isLive ? '⚡' : '●'}
@@ -355,7 +355,7 @@ export default function App() {
               ))}
             </div>
 
-            <select 
+            <select
               value={state.selectedModel}
               onChange={(e) => dispatch({ type: 'SET_VAL', key: 'selectedModel', value: e.target.value })}
               disabled={state.isLive}
@@ -366,8 +366,8 @@ export default function App() {
                 return <option key={m.id} value={m.id}>{m.label} {b?.isBlocked ? `(BLOCKED)` : ''}</option>
               })}
             </select>
-            
-            <button 
+
+            <button
               onClick={() => dispatch({ type: 'TOGGLE' })}
               className={`px-10 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl ${state.isLive ? 'bg-red-900/20 text-red-500 border border-red-500/20 hover:bg-red-900/30' : 'bg-emerald-600 text-white shadow-emerald-500/20 hover:bg-emerald-500'}`}
             >
@@ -403,7 +403,7 @@ export default function App() {
                 <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]"></span>
                 Protocol Configuration
               </h3>
-              
+
               <div className="space-y-6">
                 {[
                   { id: 'targetRepo', label: 'Repository Path', ph: 'facebook/react' },
@@ -414,35 +414,35 @@ export default function App() {
                     <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 group-focus-within:text-emerald-500 transition-colors">
                       {field.label}
                     </label>
-                    <input 
+                    <input
                       type={field.id === 'targetRepo' ? 'text' : 'password'}
                       value={field.id === 'targetRepo' ? state.targetRepo : undefined}
                       onChange={e => field.id === 'targetRepo' ? dispatch({ type: 'SET_VAL', key: 'targetRepo', value: e.target.value }) : (field.id === 'token' ? ghTokenRef.current = e.target.value : geminiKeyRef.current = e.target.value)}
                       disabled={state.isLive}
-                      className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-sm outline-none text-white font-medium transition-all focus:border-emerald-500/50 focus:bg-black/60 focus:ring-8 focus:ring-emerald-500/5 placeholder:text-zinc-700 disabled:opacity-20" 
-                      placeholder={field.ph} 
+                      className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-sm outline-none text-white font-medium transition-all focus:border-emerald-500/50 focus:bg-black/60 focus:ring-8 focus:ring-emerald-500/5 placeholder:text-zinc-700 disabled:opacity-20"
+                      placeholder={field.ph}
                     />
                   </div>
                 ))}
               </div>
 
               <div className="flex flex-col gap-3 pt-6 border-t border-white/5">
-                <button 
-                  onClick={flushMutationBuffer} 
-                  disabled={state.bufferCount === 0} 
+                <button
+                  onClick={flushMutationBuffer}
+                  disabled={state.bufferCount === 0}
                   className="w-full py-4 bg-emerald-950/20 text-emerald-400 text-[9px] font-black uppercase rounded-2xl border border-emerald-500/20 hover:bg-emerald-500 hover:text-white disabled:opacity-10 transition-all"
                 >
                   Force Vault Sync
                 </button>
                 <div className="grid grid-cols-2 gap-3">
-                    <button 
-                        onClick={() => { localStorage.setItem('emg_cursor_v86', '0'); window.location.reload(); }} 
+                    <button
+                        onClick={() => { localStorage.setItem('emg_cursor_v86', '0'); window.location.reload(); }}
                         className="py-4 bg-zinc-800/40 text-white text-[9px] font-black uppercase rounded-2xl border border-white/10 hover:bg-zinc-700 transition-all"
                     >
                         Reset Queue
                     </button>
-                    <button 
-                        onClick={() => { if(confirm("Purge all local cache?")) { localStorage.clear(); window.location.reload(); }}} 
+                    <button
+                        onClick={() => { if(confirm("Purge all local cache?")) { localStorage.clear(); window.location.reload(); }}}
                         className="py-4 bg-red-950/10 text-red-500 text-[9px] font-black uppercase rounded-2xl border border-red-500/20 hover:bg-red-500 hover:text-white transition-all"
                     >
                         Factory Wipe
@@ -507,7 +507,7 @@ export default function App() {
           </div>
         </div>
       </div>
-      
+
       {/* Dynamic Styles */}
       <style>{`
         .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -522,4 +522,3 @@ export default function App() {
     </div>
   );
 }
-

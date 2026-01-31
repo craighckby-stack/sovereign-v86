@@ -1,4 +1,4 @@
-from typing import List, Callable, Final, TypedDict, NamedTuple, ClassVar
+from typing import List, Callable, Final, ClassVar, NamedTuple
 from dataclasses import dataclass
 import sys
 
@@ -7,10 +7,10 @@ import sys
 @dataclass(frozen=True, slots=True)
 class Config:
     """Centralized configuration for the Ouroboros system."""
-    # Use ClassVar[Final] for true static constants within the configuration object
-    MAX_CYCLES: ClassVar[Final[int]] = 5  # Maximum number of full pipeline cycles to attempt
-    START_LANG: ClassVar[Final[str]] = "Ruby"
-    END_LANG: ClassVar[Final[str]] = "Ruby" # Defines the required final language for closure
+    # Use ClassVar for static constants within the configuration object
+    MAX_CYCLES: ClassVar[int] = 5  # Maximum number of full pipeline cycles to attempt
+    START_LANG: ClassVar[str] = "Ruby"
+    END_LANG: ClassVar[str] = "Ruby" # Defines the required final language for closure
 
 # --- Type Definitions ---
 
@@ -20,8 +20,9 @@ class TransformationStep(NamedTuple):
     output_lang: str
     generator: Callable[[str], str]
 
-# History tracking for each step execution.
-class HistoryEntry(TypedDict):
+# History tracking for each step execution. Using a slotted, frozen dataclass for efficiency and immutability.
+@dataclass(frozen=True, slots=True)
+class HistoryEntry:
     cycle: int
     step_in_cycle: int
     input_lang: str
@@ -43,7 +44,7 @@ History = List[HistoryEntry]
 
 # --- Helper Function ---
 
-def _extract_first_line(code: str) -> str:
+def extract_first_line(code: str) -> str:
     """Utility to safely extract and clean the first non-empty line of code."""
     if not code:
         return "N/A"
@@ -59,17 +60,17 @@ def _extract_first_line(code: str) -> str:
 
 def generate_python_from_ruby(code: str) -> str:
     """Generates Python code from Ruby source fragment."""
-    snippet = _extract_first_line(code)
+    snippet = extract_first_line(code)
     return f"# Python generated from Ruby: '{snippet}'\n# ... rest of translation"
 
 def generate_java_from_python(code: str) -> str:
     """Generates Java code from Python source fragment."""
-    snippet = _extract_first_line(code)
+    snippet = extract_first_line(code)
     return f"// Java public class generated from Python: '{snippet}'\n// ... rest of translation"
 
 def closing_transformer(code: str) -> str:
     """Regenerates the starting language (Ruby) from the previous step (e.g., Java)."""
-    snippet = _extract_first_line(code)
+    snippet = extract_first_line(code)
     return f"# Ruby code successfully regenerated. Traceback: {snippet}\n# ... final output"
 
 
@@ -127,7 +128,7 @@ class TransformationPipeline:
         if end_output_lang != start_lang:
              raise RuntimeError(
                 f"Ouroboros closure validation failed: Chain ends with '{end_output_lang}' "
-                f"but the required starting/closing language is '{start_lang}'."
+                f" but the required starting/closing language is '{start_lang}'."
             )
 
     def execute_generation(self, initial_code: str, max_cycles: int = Config.MAX_CYCLES) -> ExecutionResult:
@@ -148,7 +149,7 @@ class TransformationPipeline:
             for step_index, step in enumerate(self.chain):
                 step_in_cycle = step_index + 1
                 
-                # State Check: Ensure the current language matches the step's expected input
+                # Defensive State Check: Ensure the current language matches the step's expected input
                 if step.input_lang != current_language:
                      raise SystemError(
                          f"FATAL: Internal pipeline state corrupted. Expected input language '{current_language}', "
@@ -160,7 +161,7 @@ class TransformationPipeline:
                 
                 current_code = step.generator(current_code)
                 
-                # Update state and record history
+                # Update state and record history using the slotted dataclass
                 current_language = step.output_lang
                 
                 history.append(HistoryEntry(
@@ -171,7 +172,7 @@ class TransformationPipeline:
                     code_length=len(current_code)
                 ))
             
-            # Post-cycle check: Check if the language matches the START language
+            # Post-cycle check: Check for successful closure
             if current_language == Config.START_LANG:
                  print(f"\nSUCCESS: Cycle {cycle_num} completed. Ouroboros closed by returning to {Config.START_LANG}.")
                  break
@@ -184,13 +185,13 @@ class TransformationPipeline:
         if not successful_closure:
             print(f"\nWARNING: Max cycles ({max_cycles}) reached without closure. Final language is {current_language}.")
 
-        # Return structured results using the NamedTuple constructor
+        # Return structured results
         return ExecutionResult(
             final_code=current_code,
             cycles_run=cycles_run,
             final_language=current_language,
             transformation_history=history,
-            initial_code_snippet=_extract_first_line(initial_code),
+            initial_code_snippet=extract_first_line(initial_code),
             successful_closure=successful_closure
         )
 
@@ -223,7 +224,6 @@ end
         print("--- FINAL EXECUTION SUMMARY ---")
         print(f"Start Language/Goal: {Config.START_LANG}")
         print(f"Pipeline Steps: {engine.chain_length}")
-        # Accessing results using dot notation (due to NamedTuple)
         print(f"Start Code Snippet: {results.initial_code_snippet}")
         print(f"Cycles Run: {results.cycles_run}")
         print(f"Closure Successful: {results.successful_closure}")

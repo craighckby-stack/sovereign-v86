@@ -1,6 +1,6 @@
 # Sovereign v86: Autonomous Code Refactoring Agent
 
-Sovereign v86 is an autonomous code refactoring agent. It achieved its current state through 106 iterations of recursive self-improvement, with v86 selected specifically for optimal performance. The agent is built using free-tier APIs and is released under the MIT license.
+Sovereign v86 is an autonomous code refactoring agent. Developed through 106 iterations of recursive self-improvement, v86 was selected for its optimal performance profile. The agent utilizes free-tier APIs and is released under the MIT license.
 
 ---
 
@@ -20,10 +20,14 @@ To operate Sovereign v86, the following three inputs are required:
 
 ### Commit Strategy
 
-**Warning: Destructive Commit Strategy**
+**🚨 CRITICAL WARNING: DESTRUCTIVE COMMIT STRATEGY 🚨**
 
-The agent commits changes directly to the `main` branch, overwriting the original code structure. **Use with extreme caution.** It is highly recommended to run the agent against a dedicated feature branch or a fork.
+Sovereign v86 commits changes directly to the target branch (e.g., `main`), **overwriting the original code structure without confirmation.**
+
+**ACTION REQUIRED:** Use with extreme caution. It is mandatory to run the agent against a dedicated feature branch or a repository fork to prevent irreversible data loss.
 
 ### Exclusion List
 
-To prevent the agent from modifying specific files, append the `.txt` extension to their filenames. For example, a file named `config.txt` will be automatically ignored during processing.
+To exclude specific files from the refactoring process, append the `.txt` extension to their filenames. This is the agent's designated exclusion mechanism.
+
+*Example:* A file named `config.txt` will be automatically ignored during processing.

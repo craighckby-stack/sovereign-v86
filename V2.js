@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
+
+// Firebase Core
 import { initializeApp } from 'firebase/app';
+
+// Firebase Services
 import {
   getFirestore, doc, setDoc, serverTimestamp
 } from 'firebase/firestore';
@@ -42,7 +46,9 @@ const FILE_PATTERNS = Object.freeze({
   },
   SKIP: [
     /node_modules\//, /\.min\./, /-lock\./, /dist\//, /build\//, /\.git\//
-  ]
+  ],
+  // Sovereign v86 exclusion mechanism: files ending in .txt are ignored.
+  EXCLUSION_SUFFIX: /\.txt$/i,
 });
 
 /** Keys in state that should be persisted to local storage. */
@@ -96,9 +102,14 @@ const getPipeline = (filePath) => {
 /** Checks if a file object from the GitHub tree is relevant for processing. */
 const isRelevantFile = (f) => {
   if (f.type !== 'blob' || f.size >= CONFIG.MAX_FILE_SIZE_BYTES) return false;
-  // Check exclusion list (e.g., node_modules, minified files)
+
+  // 1. Check explicit exclusion list (e.g., node_modules, minified files)
   if (FILE_PATTERNS.SKIP.some(p => p.test(f.path))) return false;
-  // Check inclusion list (code, config, docs)
+
+  // 2. Check Sovereign v86 exclusion mechanism (.txt suffix)
+  if (FILE_PATTERNS.EXCLUSION_SUFFIX.test(f.path)) return false;
+
+  // 3. Check inclusion list (code, config, docs)
   const { CODE, CONFIG: ConfigExt, DOCS } = FILE_PATTERNS.EXTENSIONS;
   return CODE.test(f.path) || ConfigExt.test(f.path) || DOCS.test(f.path);
 };

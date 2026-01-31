@@ -8,7 +8,7 @@ import {
 } from 'firebase/auth';
 
 // --- Configuration Constants ---
-const APP_CONFIG = Object.freeze({
+const CONFIG = Object.freeze({
   MAX_FILE_SIZE_BYTES: 500_000,
   CYCLE_INTERVAL_MS: 15_000,
   MAX_API_RETRIES: 3,
@@ -47,10 +47,13 @@ const PERSISTENCE_KEYS = new Set(['selectedModel', 'targetRepo']);
 /** Decodes a Base64 string into a UTF-8 string. */
 const decodeBase64 = (str) => {
   try {
-    // Standard browser Base64 to UTF-8 decoding
-    return new TextDecoder().decode(
-      Uint8Array.from(atob(str), c => c.charCodeAt(0))
-    );
+    const binaryString = atob(str);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return new TextDecoder('utf-8').decode(bytes);
   } catch (e) {
     throw new Error(`Base64 decode failed: ${e.message}`);
   }
@@ -59,17 +62,16 @@ const decodeBase64 = (str) => {
 /** Encodes a UTF-8 string into a Base64 string. */
 const encodeBase64 = (str) => {
   try {
-    // Standard UTF-8 encoding to Base64
     const bytes = new TextEncoder().encode(str);
-    // Convert byte array to binary string for btoa (which expects Latin1/ASCII)
-    return btoa(String.fromCodeCodePoint(...bytes));
+    // Convert byte array to a binary string suitable for btoa
+    return btoa(String.fromCodePoint(...bytes));
   } catch (e) {
     throw new Error(`Base64 encode failed: ${e.message}`);
   }
 };
 
 /** Creates a URL-safe Firestore document ID from a file path. */
-const safeDocId = (path) => btoa(path).replace(/[+/=]/g, '_');
+const safeDocId = (path) => encodeBase64(path).replace(/[+/=]/g, '_');
 
 /** Parses a GitHub repository string (e.g., 'user/repo') into [owner, repo]. */
 const parseRepoPath = (repoString) => {
@@ -82,19 +84,19 @@ const parseRepoPath = (repoString) => {
 
 /** Determines the processing pipeline based on file extension. */
 const getPipeline = (filePath) => {
-  const { CONFIG, DOCS } = FILE_PATTERNS.EXTENSIONS;
-  if (CONFIG.test(filePath)) return PROCESSING_PIPELINES.CONFIG;
+  const { CONFIG: ConfigExt, DOCS } = FILE_PATTERNS.EXTENSIONS;
+  if (ConfigExt.test(filePath)) return PROCESSING_PIPELINES.CONFIG;
   if (DOCS.test(filePath)) return PROCESSING_PIPELINES.MARKDOWN;
   return PROCESSING_PIPELINES.CODE;
 };
 
 /** Checks if a file object from the GitHub tree is relevant for processing. */
 const isRelevantFile = (f) => {
-  if (f.type !== 'blob' || f.size >= APP_CONFIG.MAX_FILE_SIZE_BYTES) return false;
+  if (f.type !== 'blob' || f.size >= CONFIG.MAX_FILE_SIZE_BYTES) return false;
   if (FILE_PATTERNS.SKIP.some(p => p.test(f.path))) return false;
 
-  const { CODE, CONFIG, DOCS } = FILE_PATTERNS.EXTENSIONS;
-  return CODE.test(f.path) || CONFIG.test(f.path) || DOCS.test(f.path);
+  const { CODE, CONFIG: ConfigExt, DOCS } = FILE_PATTERNS.EXTENSIONS;
+  return CODE.test(f.path) || ConfigExt.test(f.path) || DOCS.test(f.path);
 };
 
 
@@ -106,8 +108,8 @@ const INITIAL_STATE = {
   isComplete: false,
   status: 'IDLE',
   activePath: 'Ready',
-  selectedModel: localStorage.getItem(APP_CONFIG.LOCAL_STORAGE_PREFIX + 'selectedModel') || AI_MODELS[0].id,
-  targetRepo: localStorage.getItem(APP_CONFIG.LOCAL_STORAGE_PREFIX + 'targetRepo') || '',
+  selectedModel: localStorage.getItem(CONFIG.LOCAL_STORAGE_PREFIX + 'selectedModel') || AI_MODELS[0].id,
+  targetRepo: localStorage.getItem(CONFIG.LOCAL_STORAGE_PREFIX + 'targetRepo') || '',
   logs: [],
   metrics: { mutations: 0, steps: 0, errors: 0, progress: 0 }
 };
@@ -117,7 +119,7 @@ function appReducer(state, action) {
     case 'SET_VALUE': {
       const { key, value } = action.payload;
       if (PERSISTENCE_KEYS.has(key)) {
-        localStorage.setItem(APP_CONFIG.LOCAL_STORAGE_PREFIX + key, value);
+        localStorage.setItem(CONFIG.LOCAL_STORAGE_PREFIX + key, value);
       }
       return { ...state, [key]: value };
     }
@@ -135,7 +137,7 @@ function appReducer(state, action) {
       const newLog = { ...action.payload, id: Date.now() + Math.random() };
       return {
         ...state,
-        logs: [newLog, ...state.logs].slice(0, APP_CONFIG.LOG_HISTORY_LIMIT)
+        logs: [newLog, ...state.logs].slice(0, CONFIG.LOG_HISTORY_LIMIT)
       };
     case 'SET_STATUS':
       return { ...state, status: action.payload.value, activePath: action.payload.path || state.activePath };
@@ -143,7 +145,7 @@ function appReducer(state, action) {
       const { mutations = 0, stepIncrement = 0, errors = 0, cursor, total } = action.payload;
 
       const progress = (typeof total === 'number' && total > 0 && typeof cursor === 'number')
-        ? Math.min(100, Math.floor((cursor / total) * 100)) // Use floor for cleaner progress bar
+        ? Math.min(100, Math.floor((cursor / total) * 100))
         : state.metrics.progress;
 
       return {
@@ -219,12 +221,13 @@ const useFirebaseSetup = (addLog) => {
 /** Encapsulates all external API interaction logic (Gemini and GitHub). */
 const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
-  const getGithubHeaders = (token) => ({
+  const getGithubHeaders = useCallback((token) => ({
     'Authorization': `token ${token}`,
     'Accept': 'application/vnd.github.v3+json'
-  });
+  }), []);
 
   const fetchFileContent = useCallback(async (owner, repo, filePath, token) => {
+    // Encode path components robustly
     const path = filePath.split('/').map(encodeURIComponent).join('/');
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
     const headers = getGithubHeaders(token);
@@ -244,7 +247,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       content: decodeBase64(data.content),
       sha: data.sha
     };
-  }, []); // Dependencies are handled via arguments
+  }, [getGithubHeaders]);
 
   const commitFileUpdate = useCallback(async (owner, repo, filePath, content, sha, token) => {
     const path = filePath.split('/').map(encodeURIComponent).join('/');
@@ -265,7 +268,7 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       const errorData = await res.json().catch(() => ({ message: 'Unknown error' }));
       throw new Error(`GH Commit Error (${res.status}): ${errorData.message || res.statusText}`);
     }
-  }, []);
+  }, [getGithubHeaders]);
 
   const callGeminiAPI = useCallback(async (prompt, personaText, modelId, apiKey) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
@@ -279,10 +282,10 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
       }
     };
 
-    for (let retryCount = 0; retryCount <= APP_CONFIG.MAX_API_RETRIES; retryCount++) {
+    for (let retryCount = 0; retryCount <= CONFIG.MAX_API_RETRIES; retryCount++) {
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      const timeoutId = setTimeout(() => controller.abort(), APP_CONFIG.API_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT_MS);
 
       try {
         if (!state.isLive) {
@@ -326,9 +329,9 @@ const useApiHandlers = (state, dispatch, addLog, abortControllerRef) => {
 
         const isRetryable = e.name === 'AbortError' || e.isRetryable;
 
-        if (isRetryable && retryCount < APP_CONFIG.MAX_API_RETRIES) {
-          const delay = Math.pow(2, retryCount) * 1000;
-          addLog(`API Fault (Retryable, attempt ${retryCount + 1}/${APP_CONFIG.MAX_API_RETRIES + 1}), retrying in ${delay / 1000}s...`, 'warning');
+        if (isRetryable && retryCount < CONFIG.MAX_API_RETRIES) {
+          const delay = 2 ** retryCount * 1000; // Exponential backoff
+          addLog(`API Fault (Retryable, attempt ${retryCount + 1}/${CONFIG.MAX_API_RETRIES + 1}), retrying in ${delay / 1000}s...`, 'warning');
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
@@ -363,7 +366,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 
       const processed = await callGeminiAPI(currentContent, step.text, modelId, apiKey);
 
-      // Check if content changed significantly
+      // Check if content changed significantly (length > 5 prevents trivial whitespace changes from triggering commits)
       if (processed && processed !== currentContent && processed.length > 5) {
         currentContent = processed;
         mutated = true;
@@ -404,7 +407,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
       if (result.status === 'MUTATED') {
         if (dbRef.current && user) {
           const docId = safeDocId(result.filePath);
-          const docRef = doc(dbRef.current, 'artifacts', APP_CONFIG.APP_ID, 'users', user.uid, 'insights', docId);
+          const docRef = doc(dbRef.current, 'artifacts', CONFIG.APP_ID, 'users', user.uid, 'insights', docId);
           // Non-blocking Firestore write for metrics/history
           setDoc(docRef, { path: result.filePath, ts: serverTimestamp() }).catch(e => console.warn("Firestore write failed:", e.message));
         }
@@ -425,7 +428,10 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
       isProcessingRef.current = false;
       dispatch({ type: 'SET_STATUS', payload: { value: 'IDLE' } });
     }
-  }, [state.isLive, state.targetRepo, state.selectedModel, state.isIndexed, user, addLog, processFile, dispatch, ghTokenRef, geminiKeyRef, dbRef]);
+  }, [
+    state.isLive, state.targetRepo, state.selectedModel, state.isIndexed, user,
+    addLog, processFile, dispatch, ghTokenRef, geminiKeyRef, dbRef
+  ]);
 
   const discover = useCallback(async () => {
     const repoPath = parseRepoPath(state.targetRepo);
@@ -475,11 +481,11 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
     // Run immediately on activation
     runCycle();
 
-    const timer = setInterval(runCycle, APP_CONFIG.CYCLE_INTERVAL_MS);
+    const timer = setInterval(runCycle, CONFIG.CYCLE_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [state.isLive, runCycle]);
 
-  const handleMainButton = () => {
+  const handleMainButton = useCallback(() => {
     if (state.isLive) {
       dispatch({ type: 'TOGGLE_LIVE' });
       if (abortControllerRef.current) abortControllerRef.current.abort();
@@ -489,7 +495,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
     } else {
       discover();
     }
-  };
+  }, [state.isLive, state.isIndexed, dispatch, discover, addLog, abortControllerRef]);
 
   return { handleMainButton };
 };
@@ -498,7 +504,7 @@ const useProcessingEngine = (state, dispatch, user, dbRef, ghTokenRef, geminiKey
 // --- Main Application Component ---
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, INITIAL_STATE);
-  const { isAcknowledged, firebaseReady, isLive, isComplete, isIndexed, status, activePath, metrics, logs, targetRepo, selectedModel } = state;
+  const { isAcknowledged, isLive, isComplete, isIndexed, status, activePath, metrics, logs, targetRepo, selectedModel } = state;
 
   // Refs for external dependencies and mutable state (keys are sensitive)
   const ghTokenRef = useRef('');
@@ -589,8 +595,9 @@ export default function App() {
           <aside className="lg:col-span-4 space-y-8">
             <div className="p-8 bg-zinc-900/30 border border-white/5 rounded-[2.5rem] space-y-8">
               <div className="space-y-3">
-                <label className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">Vault (owner/repo)</label>
+                <label htmlFor="targetRepo" className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">Vault (owner/repo)</label>
                 <input
+                  id="targetRepo"
                   type="text"
                   value={targetRepo}
                   onChange={e => dispatch({ type: 'SET_VALUE', payload: { key: 'targetRepo', value: e.target.value } })}
@@ -600,8 +607,9 @@ export default function App() {
                 />
               </div>
               <div className="space-y-3">
-                <label className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">GitHub Token</label>
+                <label htmlFor="githubToken" className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">GitHub Token</label>
                 <input
+                  id="githubToken"
                   type="password"
                   onChange={e => ghTokenRef.current = e.target.value.trim()}
                   disabled={isLive || isIndexed}
@@ -610,8 +618,9 @@ export default function App() {
                 />
               </div>
               <div className="space-y-3">
-                <label className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">Gemini Key</label>
+                <label htmlFor="geminiKey" className="text-[11px] font-black text-zinc-600 uppercase tracking-widest">Gemini Key</label>
                 <input
+                  id="geminiKey"
                   type="password"
                   onChange={e => geminiKeyRef.current = e.target.value.trim()}
                   disabled={isLive || isIndexed}

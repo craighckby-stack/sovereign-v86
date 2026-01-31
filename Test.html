@@ -1,21 +1,32 @@
 import sys
+from types import FrameType
+from typing import Any, Callable, Optional
 
-TARGET_VAR_NAME = 'my_secret_variable'
+# Constant defining the name of the sensitive variable to be hidden during tracing.
+SENSITIVE_VARIABLE_NAME = 'my_secret_variable'
 
-def sanitize_locals_on_trace(frame, event, arg):
+def scrub_sensitive_variable(
+    frame: FrameType, 
+    event: str, 
+    arg: Any
+) -> Optional[Callable]:
     """
-    Trace function that deletes a specific local variable if tracing is active.
-    This function is executed before every line, so performance is critical.
+    High-performance trace function designed to immediately delete a specific 
+    sensitive local variable from the frame's locals dictionary.
+
+    This function executes frequently (on every line/event), making performance 
+    critical. It ensures the variable is not persisted or exposed during tracing.
     """
-    # Access locals dictionary directly for speed.
+    # Direct access to frame locals (f_locals) is the fastest method.
     f_locals = frame.f_locals
 
-    # Check for existence and delete. This is the fastest way to handle
-    # conditional deletion in high-frequency trace contexts.
-    if TARGET_VAR_NAME in f_locals:
-        del f_locals[TARGET_VAR_NAME]
+    # Check and delete in a single optimized block. 
+    # This minimizes overhead in the high-frequency trace context.
+    if SENSITIVE_VARIABLE_NAME in f_locals:
+        del f_locals[SENSITIVE_VARIABLE_NAME]
 
-    # Must return the function itself to continue tracing the next line.
-    return sanitize_locals_on_trace
+    # Must return the function itself to continue tracing the next line/event.
+    return scrub_sensitive_variable
 
-sys.settrace(sanitize_locals_on_trace)
+# Apply the trace function globally.
+sys.settrace(scrub_sensitive_variable)

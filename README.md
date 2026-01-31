@@ -1,20 +1,20 @@
 # Sovereign v86: Autonomous Code Refactoring Agent
 
-An autonomous code refactoring agent featuring adaptive custom instruction support and intelligent project management capabilities. The agent analyzes project context from `README.md`, applies refactoring rules defined in custom instruction files, and maintains an AI-driven operational roadmap.
+An autonomous code refactoring agent featuring adaptive custom instruction support and intelligent project management capabilities. The agent analyzes project context (derived from `README.md`), applies refactoring rules defined in custom instruction files, and dynamically maintains an AI-driven operational roadmap.
 
 ## Core Capabilities
 
 | Feature | Description |
 | :--- | :--- |
-| 🤖 **AI-Powered Refactoring** | Utilizes Gemini models for deep code analysis and quality improvement. |
-| 📝 **Custom Instructions** | Supports user-defined refactoring directives via dedicated instruction files. |
-| 🔄 **Auto-Updating Roadmap** | Dynamically maintains the project TODO list based on executed changes. |
-| 🛡️ **Markdown Guardrails** | Implements strict validation to prevent markdown "spillover" into code artifacts. |
-| 📊 **Smart Queue Prioritization** | Processes artifacts in a defined logical sequence: Instructions → Code → Context. |
-| 🔒 **Multi-Model Support** | Integrates seamlessly with Lite, Flash 2.5, and Flash 3.0 model tiers. |
-| 📈 **Project Context Awareness** | Informs refactoring decisions using content derived from `README.md`. |
-| ⚡ **Rate Limit Resilience** | Features automatic model tier switching to handle API rate limiting gracefully. |
-| 🔥 **Model Health Tracking** | Continuously monitors and adapts to external API availability status. |
+| 🤖 **AI-Powered Refactoring** | Leverages Google Gemini models for deep code analysis and quality improvement. |
+| 📝 **Custom Instructions** | Enables user-defined refactoring directives via dedicated instruction files. |
+| 🔄 **Auto-Updating Roadmap** | Dynamically updates the project roadmap (`sovereign-todo.md`) based on executed changes. |
+| 🛡️ **Markdown Guardrails** | Enforces strict validation to prevent extraneous markdown content ('spillover') in code artifacts. |
+| 📊 **Smart Queue Prioritization** | Processes artifacts in a defined logical sequence (Instructions → Code → Context). |
+| 🔒 **Multi-Model Support** | Seamless integration across Lite, Stable, and Experimental model tiers. |
+| 📈 **Project Context Awareness** | Informs refactoring decisions using comprehensive context derived from `README.md`. |
+| ⚡ **Rate Limit Resilience** | Features automatic model tier switching for graceful API rate limit handling. |
+| 🔥 **Model Health Tracking** | Continuously monitors and adapts to external API availability and health status. |
 
 ---
 
@@ -22,26 +22,26 @@ An autonomous code refactoring agent featuring adaptive custom instruction suppo
 
 ### Prerequisites
 
-1.  **GitHub Repository URL:** The path to the target repository (e.g., `owner/repo`).
-2.  **GitHub Token (PAT):** A valid Personal Access Token granting `repo` and `contents` read/write permissions.
-3.  **Gemini API Key:** A valid API key for accessing Google Gemini services.
+1.  **GitHub Repository URL:** The target repository path (e.g., `owner/repo`).
+2.  **GitHub Token (PAT):** A valid Personal Access Token (PAT) with `repo` and `contents` read/write scopes.
+3.  **Gemini API Key:** A valid API key for accessing the Google Gemini API.
 
 ### Agent Configuration Defaults
 
 | Setting | Default Value | Description |
 | :--- | :--- | :--- |
-| **Cycle Interval** | 15 seconds | Delay between sequential file processing cycles. |
-| **Max File Size** | 1MB | Maximum acceptable size for files slated for modification. |
+| **Cycle Interval** | 15 seconds | The delay between sequential file processing cycles. |
+| **Max File Size** | 1MB | Maximum acceptable size for files targeted for modification. |
 | **Max API Retries** | 5 | Maximum number of attempts before abandoning an API call. |
-| **Log History Limit** | 60 entries | Constraint on the number of console entries retained. |
+| **Log History Limit** | 60 entries | Constraint on the number of console log entries retained. |
 
 ---
 
 ## Instruction Management System
 
-Sovereign v86 prioritizes and aggregates refactoring rules from specified instruction files found in the repository root.
+Sovereign v86 aggregates and prioritizes refactoring directives from specific instruction files located in the repository root.
 
-### Instruction File Hierarchy (Priority Order)
+### Instruction File Hierarchy (Precedence Order)
 
 1.  `.sovereign-instructions.md`: Global, high-priority refactoring rules.
 2.  `sovereign-todo.md`: Project-specific tasks, overriding global rules where specified.
@@ -52,13 +52,13 @@ Sovereign v86 prioritizes and aggregates refactoring rules from specified instru
 ```markdown
 # Sovereign Custom Instructions
 
-## Global Rules
+## Global Directives
 - Enforce JSDoc documentation for all public interfaces.
 - Standardize on modern ES6+ syntax (const/let, arrow functions).
 - Eliminate stray `console.log` statements.
 - Implement input validation for all user-facing entry points.
 
-## File Type Specific Directives
+## Artifact-Specific Directives
 
 ### JavaScript Files
 - Refactor callbacks to utilize `async/await` patterns.
@@ -86,26 +86,26 @@ Sovereign v86 prioritizes and aggregates refactoring rules from specified instru
 
 ---
 
-## File Processing Sequence
+## Artifact Processing Sequence
 
 The agent executes operations following this strict internal queue order:
 
-1.  **🥇 Instruction Artifacts:** Read and process all instruction files. These files are **not** modified.
-2.  **🥈 Core Code & Configuration:** Main targets for refactoring (e.g., `.js`, `.py`, `.ts`, `.json`).
-3.  **🥉 Project Context:** `README.md` is read last to gather maximum contextual understanding *after* instructions and code assessment. This file is **read-only**.
+1.  **🥇 Instruction Artifacts:** Reads and processes all instruction files. These artifacts are **read-only**.
+2.  **🥈 Core Code & Configuration:** Primary targets for refactoring and mutation (e.g., `.js`, `.py`, `.ts`, `.json`).
+3.  **🥉 Project Context:** `README.md` is read last to gather maximum contextual understanding. This file is **read-only** and provides final contextual input.
 
 ---
 
-## Roadmap Evolution (TODO Updates)
+## Roadmap Evolution and Maintenance (TODO Updates)
 
-Upon successful mutation of a code artifact, the agent initiates an AI-driven update to the project roadmap (`sovereign-todo.md`).
+Upon successful modification of a code artifact, the agent initiates an AI-driven update to the project roadmap (`sovereign-todo.md`).
 
 ### Update Mechanism
 
 1.  Refactoring operation completes successfully for `<filename>`.
-2.  The agent prompts the AI to synthesize the next set of required actions, reflecting the changes made.
+2.  The agent prompts the AI to synthesize the next set of required actions, reflecting the completed changes.
 3.  The updated TODO markdown content is committed back to the repository.
-4.  Commit messages are standardized: `[Sovereign] Roadmap Update: <filename>`.
+4.  Commit messages adhere to the standardized format: `[Sovereign] Roadmap Update: <filename>`.
 
 ### Roadmap Mutation Example
 
@@ -123,16 +123,16 @@ If error handling was recently added to a file:
 
 ### Markdown Spillover Defense
 
-Robust measures are in place to ensure model outputs contain only artifact code, free of extraneous commentary:
+Robust measures ensure that model outputs contain only pure artifact code, free of extraneous commentary or conversational text:
 
 -   Detection of markdown headers (e.g., `##`) in code outputs.
 -   Detection of role-playing phrases (e.g., "Act as a...").
--   Contaminated outputs trigger rejection, leading to a retry with a more stringent prompt.
--   "Spillover Detected" events are explicitly logged for user awareness.
+-   Contaminated outputs are rejected, triggering a retry with a more stringent prompt configuration.
+-   "Spillover Detected" events are explicitly logged for user awareness and debugging.
 
 ### Exclusion Registry
 
-Files matching the following patterns are bypassed automatically to maintain integrity and avoid performance degradation:
+Files matching the following patterns are automatically bypassed to maintain integrity and optimize performance:
 
 -   `node_modules/` (Dependency directories)
 -   `*.min.js` (Minified assets)
@@ -140,7 +140,7 @@ Files matching the following patterns are bypassed automatically to maintain int
 -   `dist/`, `build/` (Output/Build directories)
 -   `.git/` (Version control metadata)
 -   `*.log` (Log files)
--   **Protection Extension:** Files appended with `.txt` are considered immutable for the current session (e.g., `.env` becomes `.env.txt`).
+-   **Protective Extension:** Files appended with `.txt` are treated as immutable for the current session (e.g., `.env` becomes `.env.txt`).
 
 ---
 
@@ -148,53 +148,53 @@ Files matching the following patterns are bypassed automatically to maintain int
 
 | Model Name | Tier | Recommended Use Case |
 | :--- | :--- | :--- |
-| **Flash 2.5 Preview** | Lite | Cost-sensitive operations on large codebases. |
-| **Flash 1.5 Stable** | Stable | Reliable, default choice for predictable refactoring. |
-| **Flash 3.0** | Experimental | Advanced reasoning, accessible when features stabilize. |
+| **Flash 2.5 (Lite)** | Lite | Cost-sensitive operations on large codebases. |
+| **Flash 1.5 (Stable)** | Stable | Reliable, default choice for predictable refactoring. |
+| **Flash 3.0 (Experimental)** | Experimental | Advanced reasoning, accessible when features stabilize. |
 
-**Recommendation:** Begin with `Flash 1.5 Stable`. Utilize the `Lite` tier to manage operational expenses on extensive projects.
+**Recommendation:** Start with the `Flash 1.5 (Stable)` tier for reliability. Utilize the `Lite` tier to manage operational expenses on extensive projects.
 
 ---
 
 ## Operational Status Dashboard
 
-The agent displays its current operational state via the following indicators:
+The agent reports its current operational state using the following indicators:
 
 | Status | Description |
 | :--- | :--- |
-| **IDLE** | Agent initialized and awaiting command execution. |
+| **IDLE** | Agent initialized, awaiting command execution. |
 | **INDEXING** | Scanning the file system and repository structure. |
-| **ANALYZING** | Currently submitting a file or context to the AI model. |
-| **EVOLVING** | Applying AI-generated code modifications. |
-| **NEURAL STANDBY** | Paused, waiting for the next scheduled cycle interval. |
+| **ANALYZING** | Currently submitting an artifact or context to the AI model. |
+| **EVOLVING** | Applying AI-generated code modifications to the artifact. |
+| **NEURAL STANDBY** | Paused, awaiting the next scheduled processing cycle interval. |
 | **FINISHED** | All queued tasks have been completed. |
 
 ---
 
 ## Performance Metrics
 
-The following metrics are tracked during an active session:
+The following key performance indicators (KPIs) are tracked during an active session:
 
--   📊 **Mutations:** Count of files successfully refactored.
--   📋 **Steps:** Total atomic processing actions executed.
+-   📊 **Mutations:** Count of artifacts successfully refactored and committed.
+-   📋 **Steps:** Total atomic processing actions executed by the agent.
 -   ❌ **Errors:** Cumulative count of encountered operational failures.
--   ⏱️ **Latency:** Mean processing time recorded per artifact.
+-   ⏱️ **Latency:** Mean processing time recorded per artifact submission.
 -   📈 **Progress:** Completion percentage of the current task queue.
 
 ---
 
-## ⚠️ Critical Warning: Destructive Commit Strategy
+## ⚠️ Critical Warning: Direct Commit Strategy
 
-**Sovereign v86 executes commits directly onto the target branch (e.g., `main`), resulting in immediate and unconfirmed overwrites of original source code.**
+**Sovereign v86 executes commits directly onto the target branch (e.g., `main`), resulting in immediate, unconfirmed, and potentially destructive overwrites of original source code.**
 
-### Mandatory Safety Procedures
+### Mandatory Safety Protocols
 
 ✅ **Exercise Extreme Caution**
 ✅ **Target a Feature Branch or Repository Fork**
-✅ **Mandatory Diff Review Prior to Pushing to Main**
+✅ **Mandatory Diff Review Prior to Merging to Main**
 ✅ **Maintain Regular Repository Backups**
 
-### Recommended Best Practices
+### Recommended Operational Practices
 
 1.  **Fork/Branch Isolation:** Always operate the agent within an isolated branch or a repository fork.
 2.  **Incremental Execution:** Process files in smaller batches to maintain fine-grained control.
@@ -204,17 +204,17 @@ The following metrics are tracked during an active session:
 
 ## Troubleshooting Guide
 
-### Agent Halts Processing
+### Agent Processing Halt
 
 **Potential Causes:**
--   GitHub API rate limit has been reached (Wait 60 seconds for renewal).
+-   GitHub API rate limit reached (renewal typically occurs within 60 seconds).
 -   The active AI model is temporarily unavailable (Agent attempts automated tier fallback).
 -   Invalid API Key or insufficient GitHub credentials.
 -   Repository access permissions are restrictive.
 
-**Resolution:** Consult the detailed console logs for the specific error code or message preceding the halt.
+**Resolution:** Consult the detailed console logs for the specific error code or message preceding the halt event.
 
-### "Spillover Detected" Errors
+### Model Output Contamination ('Spillover')
 
 This indicates the model failed to produce pure code, outputting explanation text instead. The agent handles this by:
 
@@ -222,16 +222,16 @@ This indicates the model failed to produce pure code, outputting explanation tex
 2.  Initiating a prompt retry with enhanced adversarial constraints.
 3.  Skipping the file if subsequent retries also fail.
 
-**Mitigation:** Enhance clarity and specificity within custom instruction files.
+**Mitigation:** Enhance the clarity and specificity of custom instruction files.
 
-### Unexpected File Skipping
+### Artifact Exclusion
 
 If expected files are being bypassed:
 
 -   Verify the file path does not match any patterns in the **Exclusion Registry**.
 -   Check if the file size exceeds the 1MB threshold.
 -   Confirm the file does not have the `.txt` protective extension.
--   Review `sovereign-todo.md` for any explicit skip directives.
+-   Review the project roadmap (`sovereign-todo.md`) for any explicit skip directives.
 
 ---
 
